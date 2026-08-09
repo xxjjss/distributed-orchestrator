@@ -1,0 +1,306 @@
+# Agent Manager 设计文档
+
+一个轻量级状态机 / 工作流模版，用于驱动 LLM worker agent 的多步执行、状态持久化与故障恢复。
+
+模版负责**机制**（持久化、幂等、并发、重试、审计），业务方只负责**声明**（有哪些状态、每个状态做什么、如何转移）。
+
+---
+
+## 1. 设计目标与边界
+
+### 模版承诺
+
+| 承诺 | 说明 |
+|---|---|
+| 状态转移原子、不丢步 | 一次转移 = 写一条新记录，写成功即转移完成，写失败即当前状态重来 |
+| 已完成步骤不重跑 | checkpoint 落库后进程崩溃，恢复时从最后 checkpoint 继续，不重新调 LLM |
+| 并发下单实体串行 | 通过 lease（乐观锁）保证同一分支同一时刻只有一个 worker 在推进 |
+| `route` 纯函数可复现 | 状态转移决策只依赖 output，可无副作用重放 |
+
+### 模版**不**承诺（下推给业务方）
+
+| 不承诺 | 由谁负责 |
+|---|---|
+| LLM 输出的正确性 | worker 的 prompt / 推理逻辑 |
+| tool 调用的幂等键 | worker 调用外部服务时自带幂等键 |
+| 语义级"做对了没有" | worker + route 的业务判断 |
+| `substate` / `input` 的格式含义 | worker 自定义（约定用 JSON string） |
+
+### 核心原则
+
+- **worker 是纯函数**：`(input, state, substate) -> (output, nextState)`。它不知道自己是不是重试、上一次跑到哪、有没有历史。
+- **manager 是唯一懂"进度"的组件**：扫描未完成任务、抢 lease、喂上下文给 worker、收 output、推进状态。
+- **append-only**：每步生成新记录，旧记录只允许更新控制字段（progress / lease）。完整轨迹可审计。
+- **幂等只承诺状态转移**：LLM 非确定，模版不承诺"重放得同一结果"，只承诺"已完成的步骤不重放"。
+
+---
+
+## 2. 数据模型
+
+单张 DynamoDB 表。PK = workid，SK = 层级 process-id。
+
+### 主键设计
+
+```
+PK (workid)     SK (process-id)      说明
+────────────    ─────────────────    ────────────────────────────
+W-123           0000                 根任务元记录
+W-123           0000#0001            根任务第 1 步
+W-123           0000#0002            根任务第 2 步
+W-123           0001                 子任务 A 元记录（由某步派生）
+W-123           0001#0001            子任务 A 第 1 步
+W-123           0002                 子任务 B 元记录
+```
+
+- **workid 不变**：整个任务树共享同一 PK。`Query(PK=W-123)` 一次拉出整棵树。
+- **SK = `{branchId}#{stepIndex}`**：`branchId` 是分支序号（根 = `0000`），`stepIndex` 是分支内递增步骤。
+- **单个分支全历史**：`Query(PK=W-123, SK begins_with "0001")`。
+- **取分支最新步**：`Query(PK, SK begins_with branchId, ScanIndexForward=false, Limit=1)`。
+- **子任务血缘**：子任务元记录存 `parentSk` 字段（如 `0000#0002`），顺着回溯。
+
+> 若子任务数量极大或需跨父任务查某类子任务，再加 GSI（`PK=parentSk`）。先不过度设计。
+
+### 字段表
+
+| 字段 | 类型 | 归属 | 说明 |
+|---|---|---|---|
+| `workid` | PK | 系统 | 任务唯一标识，整棵任务树共享 |
+| `processId` | SK | 系统 | `{branchId}#{stepIndex}`，分支内唯一 |
+| `parentSk` | string | 系统 | 派生本分支的父步骤 SK（仅子任务元记录有） |
+| `handler` | string | 系统 | 该记录由哪个 worker agent 处理（如 `provision-worker`） |
+| `stateFingerprint` | string | 系统 | `state` 名 + 状态图版本。恢复重放时校验，不匹配则转终态（非确定性检测，见 §4） |
+| `state` | string | worker 声明 | 当前状态（大阶段），由 worker 的状态枚举定义 |
+| `substate` | string(JSON) | worker 自定义 | 状态内部 checkpoint，worker 序列化/恢复上下文 |
+| `progress` | enum | 系统 | 生命周期，见下表。manager 据此判断可否拉起 |
+| `retryable` | bool | 系统/worker | 仅 `progress=error` 时有意义：可重试 vs 终态 |
+| `input` | string(JSON) | worker 自定义 | 本步入参，由 route 从上一步 output 裁出 |
+| `output` | string(JSON) | worker 产出 | 本步产出，供 manager route + 审计读取 |
+| `leaseOwner` | string | 系统 | 当前认领者 id。判断"谁在跑"、防重复拉起 |
+| `leaseExpiry` | number | 系统 | lease 过期时间戳。过期即视为可重新认领 |
+| `attemptCount` | number | 系统 | 已尝试次数。超阈值转终态 error |
+| `createdAt` | number | 系统 | 记录创建时间 |
+| `updatedAt` | number | 系统 | 最后更新时间，判断"停多久了" |
+
+### `progress` 枚举语义
+
+| 值 | 含义 | manager 动作 |
+|---|---|---|
+| `new` | 已创建、未认领 | 可直接拉起 |
+| `waiting` | 在等外部事件 / 上游子任务 | **不拉**（拉了也没用，它在等别人） |
+| `in-progress` | 有 worker 正在跑 | 仅当 lease 过期才拉起 |
+| `finished` | 本步正常结束 | 不动（转移已产生下一条记录） |
+| `error` + `retryable=true` | 可重试失败 | attemptCount 未超阈值则拉起 |
+| `error` + `retryable=false` | 终态失败 / 已进补偿 | **不碰** |
+| `timedout` | 超时（见下，分两类） | 依超时类型区分处理 |
+
+> `error` 分 retryable / terminal，直接呼应 Saga 语义："业务失败但技术成功"落成 `retryable=false`，manager 不会无脑重试一个永远失败的步骤。
+
+> **显式 `progress` 是刻意选择。** LangGraph 不存状态标志，"waiting"靠"有 interrupt write 但无 resume write"推断——难排查、难被外部工具消费。DBOS 存显式 `status` 枚举。我们跟 DBOS 一致：显式存，manager 和排查工具直接读，不靠推断。
+
+**两类超时（借鉴 Temporal 的 schedule-to-start vs start-to-close）。** 分布式系统无法直接观测进程崩溃，超时是唯一的故障探测手段，但两类语义不同，守护层反应也不同：
+
+| 超时类型 | 触发条件 | 根因 | 守护层动作 |
+|---|---|---|---|
+| 调度超时 | `progress=new` 太久没被认领 | 可能没有 worker 在跑 / 队列积压 | 告警 + 考虑扩容，**重拉无意义** |
+| 执行超时 | `progress=in-progress` 且 `leaseExpiry` 已过 | worker 死了或卡住 | bump `attemptCount`，未超阈值则改回 `new` 重新可认领 |
+
+---
+
+## 3. 组件职责
+
+### worker agent（纯粹、无状态、可被随时拉起）
+
+```
+输入：input + state + substate     ← manager 喂给它
+产出：output + nextState（或 substate 更新）
+不关心：自己是不是重试、上一次跑到哪、有没有历史、DynamoDB
+```
+
+worker 只实现两件事：
+
+- `enter(input, state, substate) -> Output`：执行该状态的工作（LLM 调用 + tool 调用）。有副作用、非确定。内部可以是 ReAct 循环，每推进一个内部步骤前通过 manager 提供的 checkpoint API 落 `substate`。
+- `route(output) -> Transition`：**纯函数**，只读 output，决定下一步。返回下列之一：
+  - `toState(nextState, input)` — 转到本分支下一个状态
+  - `toSubstate(substate)` — 留在当前状态，更新 checkpoint（继续内部循环）
+  - `finish(output)` — 本分支成功结束
+  - `spawn(handler, input)` — 派生子分支（调用另一个 agent），当前分支进入 `waiting`
+  - `fail(retryable, reason)` — 失败，标记可否重试
+
+`enter` 与 `route` 必须分离：`enter` 非确定、有副作用；`route` 纯函数、可无副作用重放。这是恢复可复现的支点。
+
+### agent-work-manager（唯一懂"进度"的组件）
+
+主循环：
+
+1. **扫描**未完成任务：`progress ∈ {new, (in-progress 且 lease 过期), (error 且 retryable 且 attemptCount<max), timedout}`。
+2. **抢 lease**：CAS 更新 `leaseOwner` + `leaseExpiry`（条件：无人持有或已过期）。抢到才继续。
+3. **读上下文**：取该分支最新记录的 `state` + `substate` + `input`。
+4. **拉起 worker**：调对应 `handler`，喂入 `(input, state, substate)`。worker 心跳续 lease。
+5. **收 output → route**：
+   - `toState` / `finish` / `spawn` / `fail` → **原子写一条新记录**（下一个 state，`progress=new`），当前记录标 `finished`。
+   - `toSubstate` → 更新当前记录的 `substate` + `progress` 保持 `in-progress`，续 lease，worker 继续内部循环。
+6. **释放 / 续 lease**。
+
+守护职责（防卡死）：
+
+- manager 本身**必须幂等且防并发**：两个 manager 实例扫到同一过期任务，靠 lease CAS 抢占，只有一个能拉起。
+- **manager 只负责"把卡住的任务重新变成可认领"**（重置 lease / bump attemptCount / 改 progress），实际业务逻辑永远由 worker 跑。守护层出 bug 不污染业务。
+
+---
+
+## 4. 幂等与故障恢复
+
+### 幂等的四个层次
+
+0. **提交幂等（workid 即幂等键）**：`createRoot(workid, ...)` 带条件写（`attribute_not_exists(PK 且 SK=0000)`）。同 workid 重复提交返回既有任务、不新建。这样上游（SQS 重投、HTTP 重试）用同一个 workid 重复提交，任务树**只建一次**——外部调用方由此拿到 exactly-once。这是 DBOS 的核心洞察：`workflow_uuid` 复用则工作流只执行一次。
+1. **状态转移幂等**：转移 = 带条件写新记录（`attribute_not_exists(SK)`）。撞了说明已有人推进，放弃。这是模版承诺的核心。
+2. **步骤不重跑**：`enter` 产出在转移成功前落库。恢复时先查 checkpoint，做过的步骤直接读结果，不重调 LLM（省钱 + 防重复副作用）。见下方恢复算法。
+3. **tool 调用幂等**：worker 的每个 tool call 自带幂等键，调用前先查"这个 call id 执行过没"。复用现有 outbox 模式。**这一层是 worker 的责任，模版不承诺**。
+
+### 步骤恢复算法（借鉴 DBOS 的 check-then-execute）
+
+"已完成步骤不重跑"不能只是承诺，要落成确定的算法。每一步执行前先查缓存：
+
+```
+执行步骤 (workid, processId) 前：
+  查该记录是否已有 output
+    命中 → 直接返回缓存 output，不执行（不重调 LLM、不重打 tool）
+    未命中 → 执行 enter → 原子写 output
+```
+
+manager 恢复一个分支时的完整流程：
+
+```
+1. latest(workid, branchId) 取分支最新记录 → 得到 state + substate + output 状态
+2. 若该记录已有 output（步骤跑完了、只是转移没发生）
+     → 用 output 跑 route，补做转移（建下一条记录）
+3. 若该记录无 output（步骤跑到一半崩了）
+     → 用 state + substate 重新拉 worker，从 substate 指示的内部步骤继续
+```
+
+**非确定性检测（借鉴 DBOS 的 function_name 校验）。** worker 是 LLM，重放时若代码 / prompt / 状态图已变更，可能走到与记录不一致的步骤。每条记录存 `handler` + 一个 `stateFingerprint`（state 名 + 状态图版本）。恢复重放时校验：若当前要执行的步骤指纹 ≠ 记录的指纹，**转终态 `error(retryable=false)` 并告警**，而不是硬跑一个语义已变的流程。这把"悄悄跑错"变成"显式失败"。
+
+### 崩溃恢复：两种粒度
+
+| 崩溃位置 | 恢复依据 | manager 动作 |
+|---|---|---|
+| state **内部**（substate 推进到一半） | `state` 不变 + 最后落库的 `substate` | 用同 state + 该 substate 重新拉 worker |
+| state **结束、下一个没开始**（output 已存但新记录没建） | `output` + route 结果 | 建下一个 state 记录再拉 |
+
+**关键：转移是单个原子写。** "存 output → 算 nextState → 建下一条记录"必须一次 `PutItem` / `TransactWrite` 完成。永远只有一个"真相"：下一条记录存在 = 转移完成；不存在 = 当前 state 重来。manager 不会陷入"该重跑还是该前进"的两难。
+
+### 并发模型
+
+- **单分支严格串行**：`stepIndex = maxStep + 1` + 条件写，撞了直接失败（说明重复拉起）。
+- **并行只发生在 fan-out 出子分支时**：子分支 = 新 `branchId`，天然隔离。并发处理只集中在"派生子任务"这一个点。
+- 不用时间戳当 SK：LLM 步骤可能同毫秒，且时间戳不保证单调。
+
+**lease 是正确性前提，不是优化。** LangGraph **没有内置锁，多 worker 场景"最后写赢"**——这是它明确承认的生产缺陷，自建 saver 才能补。我们不能重蹈：
+
+- **认领 = 原子状态转换，不只是写 lease 字段。** 借鉴 DBOS 的原子 `ENQUEUED→PENDING` 转换：认领一步做 `new → in-progress` 的条件更新（`ConditionExpression: progress=new AND (leaseOwner 不存在 OR leaseExpiry 已过)`），同时写入 `leaseOwner`/`leaseExpiry`。CAS 成功才算认领到，保证**恰好一个 runner**。
+- 两个 manager 实例同时扫到同一过期任务 → 都尝试认领，CAS 只有一个成功，另一个放弃。守护层自身的防重复拉起就靠这个。
+
+### 心跳续租（借鉴 Temporal 的 heartbeat = lease + checkpoint）
+
+`leaseExpiry` 会过期，长的 LLM state（几分钟的推理链）必须续租，否则守护层会误判"卡住"而重复拉起一个其实在正常跑的 worker。Temporal 的洞察：**心跳同时做两件事——续租 + 携带进度 checkpoint**。我们合并到 `checkpoint()` 调用里：
+
+- worker 在长 state 内部每推进一个子步骤就调 `checkpoint(substate)`，该调用**同时**续 `leaseExpiry`（`now + leaseTTL`）。
+- 续租频率建议 ≈ `0.5 × leaseTTL`（Temporal 用 0.8×，留更多余量）。崩溃前最后一次 checkpoint 不节流，保住最新进度供恢复。
+- 心跳只是"我还活着且有进展"的信号，不是定时器——判据是"有没有推进 substate"，不是"过了多久"。
+
+---
+
+## 5. 状态存储 skill
+
+提供一个 skill 生成结构化记录，屏蔽 PK/SK 拼接与序列化细节，worker 不直接碰 DynamoDB。核心操作：
+
+- `createRoot(workid, handler, initialState, input)` — 建根任务。**条件写**：同 workid 已存在则返回既有任务、不新建（提交幂等，见 §4）
+- `checkpoint(workid, processId, substate)` — 更新当前 state 内部 checkpoint
+- `transition(workid, branchId, output, nextState, nextInput)` — 原子写下一步记录
+- `spawn(workid, parentSk, handler, input)` — 派生子分支，父分支转 `waiting`
+- `finishBranch(workid, branchId, output)` — 分支成功结束
+- `failBranch(workid, branchId, retryable, reason)` — 分支失败
+- `latest(workid, branchId)` — 取分支最新记录（恢复用）
+
+skill 负责把 worker 给的 `substate` / `input` / `output` 序列化成 JSON string 存，读时反序列化。worker 只管业务对象。
+
+---
+
+## 6. 时序示例
+
+```
+1. createRoot(W-123, "provision-worker", STATE_A, {...})
+   → W-123 / 0000#0001, state=A, progress=new
+
+2. manager 扫到 new，抢 lease，拉起 provision-worker
+   worker.enter(input, A, null)
+     → 内部循环，checkpoint(substate={step:1})   [原地更新]
+     → checkpoint(substate={step:2})
+     → route(output) = toState(B, nextInput)
+   → transition：W-123 / 0000#0002, state=B, progress=new；0000#0001 标 finished
+
+3. manager 扫到 B，拉起 worker
+   worker.enter → route = spawn("audit-worker", {...})
+   → spawn：W-123 / 0001（子分支元记录，handler=audit-worker）
+            W-123 / 0000#0002 标 waiting
+
+4. manager 拉起 audit-worker 跑子分支 0001...
+   子分支 finish → 回写父分支，父分支 waiting → new，继续
+
+5. 根分支 route = finish(output)
+   → W-123 / 0000#000N，progress=finished，整树完成
+```
+
+---
+
+## 7. 未决 / 后续
+
+- manager 的扫描是轮询还是事件驱动（DynamoDB Streams）——先轮询，量大再上 Streams。
+- 子分支完成后如何通知父分支恢复（回调 vs 父分支轮询子分支 progress）——见 worker 示例中的约定。
+- lease TTL 与心跳间隔的具体数值，随 worker 单步耗时调整。
+
+---
+
+## 8. Prior Art / 选型对照
+
+本设计不是新发明——它是业界成熟的 **durable execution（持久化执行）** 模式在"LLM agent + DynamoDB"场景下的一个轻量落地。以下对照记录我们借鉴了什么、在哪些点上刻意不同，以及何时该直接用现成方案而非自研。
+
+### 三个参考实现
+
+| 项目 | ⭐ | 定位 | 与本设计的关系 |
+|---|---|---|---|
+| **LangGraph** | ~39k | LLM agent 专用的图 / 状态机 + checkpointer | 场景最贴近。thread_id / checkpoint_ns / subgraph 对应我们的 workid / branchId。**但它无内置并发锁、无显式状态、副作用不去重**——正是我们要补的三点 |
+| **DBOS** | ~1.5k | 数据库背书的 durable workflow（步骤级 memoization） | 恢复算法最贴近。`(workflow_uuid, function_id)` ≈ 我们的 `(workid, processId)`；check-then-execute、workflow_uuid 即幂等键、function_name 非确定性检测都被我们采纳 |
+| **Temporal** | ~22k | 通用 durable execution 集群（event sourcing + replay） | 设计模式来源。workflow/activity 分离 ≈ route/enter 分离；heartbeat=lease+checkpoint；两类超时；signal/child workflow ≈ waiting/spawn |
+
+### 逐字段对照
+
+| 本设计 | LangGraph | DBOS | Temporal | 结论 |
+|---|---|---|---|---|
+| `workid` (PK) | `thread_id` | `workflow_uuid`（兼幂等键） | Workflow ID | 一致；我们采纳 DBOS 的"PK 即幂等键" |
+| `processId`=`branchId#stepIndex` | `checkpoint_ns`+`checkpoint_id` | `function_id`(单调 int) | Event 序号 | 我们更紧凑：一个 SK 编码命名空间+步序 |
+| `parentSk` | `metadata.parents` | `parent_workflow_id` | Parent Workflow | 一致 |
+| `state`/`substate` | `channel_values` | （隐式，靠 function_id 位置） | （隐式，靠 replay 位置） | 我们**显式存 state**，比 LangGraph/Temporal 好排查 |
+| `output` | `channel_values` | `operation_outputs.output` | Event result | 一致，恢复/route 的核心 |
+| `progress` enum | 无（靠 pending write 推断） | `status` enum | Event 类型推断 | 我们显式，与 DBOS 一致 |
+| `leaseOwner`/`leaseExpiry` | **无（缺陷）** | `executor_id`+`owner_xid` | Heartbeat timeout | 我们采纳 lease+CAS |
+| `attemptCount` | 无 | `recovery_attempts` | Retry policy | 一致 |
+| `stateFingerprint` | 无 | `function_name` 校验 | replay 非确定性错误 | 我们采纳 DBOS 的非确定性检测 |
+| `retryable` | 特殊 write idx=-1 | `status=ERROR` | non-retryable errors | 一致 |
+
+### 我们刻意不同 / 更简的地方
+
+- **不做 event sourcing + 全量 replay（不同于 Temporal/LangGraph）。** 它们靠"从头重放确定性代码"重建状态。LLM 非确定，重放代价高且危险。我们改为**显式存 state + 步骤级 memoization**（DBOS 路线）：恢复时读最新记录 + 查缓存跳过已完成步，不重跑整条链。
+- **分层 SK 把子图命名空间和步骤序号压进一个 key**，比 LangGraph 的 `(ns, checkpoint_id)` 双字段更省 DynamoDB 查询。
+- **显式 `progress` + 独立守护层**：DBOS 恢复是 executor 本地启动时做，无独立 daemon；我们要一个独立守护层扫超时（更贴合我们已有的 Lock TTL / Step Functions 运维模式）。
+
+### 何时该直接用现成方案，而非自研本模版
+
+| 情况 | 建议 |
+|---|---|
+| 能引第三方依赖、LLM 场景 | **直接用 LangGraph**（配 DynamoDB checkpointer），省掉自研全部持久化/恢复/幂等 |
+| 能引依赖、想要通用且数据库背书、轻量 | **直接用 DBOS**（Postgres 背书，装饰器标 step） |
+| 已有 Temporal / Step Functions 集群 | 用托管编排，别重造 |
+| **不能引第三方**（合规限制），或**必须贴合现有 DynamoDB + Step Functions 栈**、复用现有 Lock/outbox 模式 | **自研本模版**，并把上述三个项目当参考实现——尤其 DBOS 的 check-then-execute 恢复算法和 LangGraph 的 subgraph 命名空间模型，直接借鉴，别从零推导 |
+
+> 一句话：本设计的抽象与业界收敛方向完全一致，这本身是合理性的强信号。自研的唯一正当理由是"不能引依赖"或"必须贴合现有栈"；否则优先用 LangGraph / DBOS。
