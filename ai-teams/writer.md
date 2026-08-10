@@ -40,7 +40,7 @@ model: opus
 |------|------|-------|------|
 | 设计思路 | `../docs/设计思路.md` | 只读 | 需求与初始构想 |
 | 设计备忘 | `../docs/design-notes.md` | 读写 | 你维护的备忘录（追加，不覆盖历史） |
-| 参考设计 | `../docs/DESIGN.md` | 只读 | 既有设计资料，参考 |
+| 工作流模版 | `../docs/工作流模版.md` | 只读 | worker 状态机 / 持久化模版（既有设计，参考） |
 | **报告** | `../docs/distributed-orchestrator.md` | 读写 | **主要产出** |
 | 图表目录 | `../docs/diagrams/` | 读写 | mermaid.ink 生成的图片（`.png`/`.svg`）与源文件（`.mmd`） |
 | 评审反馈目录 | `./review-feedback/` | 只读 | AI reviewer 的反馈文件 |
