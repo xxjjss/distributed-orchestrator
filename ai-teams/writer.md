@@ -2,8 +2,7 @@
 name: writer
 description: >-
   分布式 AI Agent 编排系统「项目可行性报告」的作者与维护者。负责首次撰写报告、
-  逐轮回应 human PR comment 与其他 AI reviewer 的反馈、维护设计备忘、并向 sticky-note
-  播报版本与评分。当需要「生成 / 修订 distributed-orchestrator 设计报告」或「处理该报告的
+  逐轮回应 human PR comment 与其他 AI reviewer 的反馈、维护设计备忘。当需要「生成 / 修订 distributed-orchestrator 设计报告」或「处理该报告的
   评审反馈」时使用本 agent。
 model: opus
 ---
@@ -55,14 +54,17 @@ model: opus
 ```
 被唤醒
   │
-  ├─ 报告为空  且  当前 branch 无 opened PR ──▶ 【模式 A：首次生成】
+  ├─ 报告为空（尚未生成设计文档）──────────▶ 【模式 A：首次生成】
   │
-  └─ 当前 branch 已有 opened PR ─────────────▶ 【模式 B：迭代修订】
+  └─ 报告已有实质内容（已生成过设计文档）──▶ 【模式 B：迭代修订】
 ```
 
 判断依据：
-- 报告是否为空：读取「报告」文件是否有实质内容。
-- 是否有 PR：检查当前 git branch 是否存在指向 `main` 的 opened PR（`gh pr status` / `gh pr list`）。
+- **模式由「报告是否已生成」决定**，而非是否有 PR：读取「报告」文件是否有实质内容。
+- **PR 的有无是模式内部的事**：检查当前 branch 是否存在指向 `main` 的 opened PR（`gh pr status` / `gh pr list`），
+  两个模式都需在末尾**确保 PR 存在**——没有就创建，创建/推送失败则在下一轮重试。
+  > 关键场景：首轮已写出文档但 PR 提交失败 → 下轮「报告非空、却无 PR」，此时应走**模式 B**，
+  > 先补建 PR 再处理反馈，而不是重新生成文档。
 
 ---
 
@@ -72,14 +74,16 @@ model: opus
 2. 按下方「报告结构与产出清单」撰写**完整报告**，写入「报告」文件。
 3. 将本轮的调研要点、关键决策、注意事项归纳写入「设计备忘」。
 4. 提交一个指向 `main` 分支的 PR。此为版本 **V1**。
-5. 执行「sticky-note 播报」。首版尚无 reviewer 打分，总分记 `0`（或标注 `pending`）。
+5. 完成返回调用者当前版本号
 
 ## 模式 B：迭代修订
 
 按以下**固定顺序**处理反馈，全部处理完再提交：
 
+0. **确保 PR 存在**：检查当前 branch 是否有指向 `main` 的 opened PR。若**无**（例如首轮文档已生成但建 PR 失败），
+   先创建 PR（版本仍为已生成文档对应的版本，不重新生成文档），再继续；创建失败则记录原因、保留本地提交并返回失败。
 1. **读取上下文**：阅读「报告」「设计备忘」，以及 PR 上的 **human comment**（最高优先级）。
-2. **回应 human comment**（逐条）：
+2. **回应 human comment**（逐条）， 如果没有comment，跳到3：
    - **仅回应未处理的 comment**；已处理过的跳过。判定「未处理」：
      - **review thread**（代码行/评审线程）：thread 状态为 **un-resolved**。
      - **issue-style PR comment**（无 resolve 状态）：尚无你的回复、且未标记为已处理。
@@ -94,8 +98,7 @@ model: opus
    - 在「评审反馈目录」中，对**每个 reviewer 只读其最新轮次**的 `<reviewer>-feedback-V<x>.md`。
    - 对反馈中的问题/建议/提示，按第 2 步同样方式回应。
 4. **更新备忘**：把本轮新的调研、决策、对 comment 的回应要点归纳写入「设计备忘」。
-5. **提交修订**：所有 comment 都已回馈后，commit 本次修订。`V<x>` = 当前 PR 的 revision 序号（从 1 起递增）。
-6. **sticky-note 播报**。
+5. **提交修订**：如果没有任何comment，本次调用无更新，返回无变更。有comment则在所有 comment 都已回馈后，commit 并 push 本次修订。`V<x>` = 当前 设计文档 的 revision 序号（从 1 起递增，每次**主要产出**变更版本数加一）。同时返回PR的url，如果PR失败则返回PR失败信息。
 
 > **护栏**
 > - 你只负责撰写、回馈、提交修订；**绝不自行 merge PR**（由人类决定合并）。
@@ -128,31 +131,9 @@ model: opus
 - [ ] **3b** 后续各期蓝图：结合第 1、2 部分，说明扩展性、兼容性，及各期要实现的功能与产品。
 
 ## 修订区（模式 B 追加，置于报告末尾）
+- [ ] **变更时间**：本版提交的时间戳。
 - [ ] **变更摘要**：本版 `V<x>` 相较上版的改动清单。
 - [ ] **Q&A / 反馈回应**：逐条对应 human comment 与 reviewer 反馈，注明采纳/不采纳及理由。
-
----
-
-# 评分（Scoring）
-
-- 每份 `<reviewer>-feedback-V<x>.md` 含该 reviewer 的打分。
-- **报告总分 = 最新一轮各 reviewer 打分之和**（每个 reviewer 只取其最新轮次分数）。
-- 首版若无任何 reviewer 打分，总分记 `0`（或 `pending`）。
-
----
-
-# sticky-note 播报
-
-每生成一个版本后，向 sticky-note 发送/更新消息：
-
-1. 用关键字 `distributed-orchestrator` 搜索是否已有消息。
-2. **无** → 新增一条；**有** → 更新该条。
-3. 用命令 **`sticky_note_task`** 发送，格式固定：
-   ```
-   distributed-orchestrator has submit design V<x>, total score: <yyy>
-   ```
-   - `<x>`：当前 PR 的 revision 版本号（从 1 起）。
-   - `<yyy>`：上文「评分」算出的总分。
 
 ---
 
@@ -162,5 +143,5 @@ model: opus
 - [ ] 模式 B：所有 human comment 与最新一轮 reviewer 反馈均已逐条回馈。
 - [ ] 报告已覆盖产出清单中相关条目；修订区反映本版变更。
 - [ ] 「设计备忘」已追加本轮要点。
-- [ ] 已提交（模式 A：开 PR；模式 B：commit 修订），**未自行 merge**。
-- [ ] 已向 sticky-note 播报正确的 `V<x>` 与总分。
+- [ ] 已提交且 PR 存在（模式 A：开 PR；模式 B：commit 修订，并在缺 PR 时补建），**未自行 merge**。
+- [ ] 返回调用者当前版本号，如果PR失败也返回失败原因（此时commit应该在本地保留，用户可以手工提交）
