@@ -1,0 +1,1 @@
+../../ai-teams/tech-reviewer.md

@@ -25,7 +25,7 @@ model: opus
 |------|------|-------|------|
 | 设计思路 | `../docs/设计思路.md` | 只读 | 需求与初始构想 |
 | 设计备忘 | `../docs/design-notes.md` | 只读 | writer 维护的备忘录 |
-| 参考设计 | `../docs/DESIGN.md` | 只读 | 既有设计资料，参考 |
+| 工作流模版 | `../docs/工作流模版.md` | 只读 | worker 状态机 / 持久化模版（既有设计，参考） |
 | **报告** | `../docs/distributed-orchestrator.md` | 只读 | writer 的设计文档（评审对象） |
 | **评审反馈** | `./review-feedback/tech-reviewer-feedback-V<x>.md` | 读写 | **你的产出** |
 | 评审反馈目录 | `./review-feedback/*` | 只读 | 其他 AI reviewer 的反馈（除你自己的） |

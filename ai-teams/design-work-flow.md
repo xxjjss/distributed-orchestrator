@@ -3,7 +3,13 @@ name: design-work-flow
 description: >-
   distributed-orchestrator 设计报告的编排工作流：检查环境与分支同步 → 唤醒 writer 写作/修订
   → fan out tech-reviewer 与 product-reviewer 评审 → 汇总评分并 sticky-note 播报。
+  当需要「跑一轮 distributed-orchestrator 设计流程 / 生成或迭代该设计报告」时使用本 agent。
+model: opus
+tools: Agent, Bash, Read
 ---
+
+> **前置依赖**：本工作流通过 `Agent` 工具 fan out 三个 subagent——`writer`、`tech-reviewer`、
+> `product-reviewer`——它们必须已注册（`.claude/agents/` 下可见）。缺任一则 fan out 会失败。
 
 # 每次运行的工作流程
 1. 检查 ghx 链接状态、claude api 链接状态和网络链接状态；若失败则 **sticky-note 播报**错误消息并退出。
@@ -28,11 +34,15 @@ description: >-
 
 # sticky-note 播报
 
-每生成一个版本后，向 sticky-note 发送/更新消息：
+每生成一个版本后，向 sticky-note 发送/更新消息。**幂等要求**：本项目在 sticky-note 上
+**始终只保留一条便签**——重复运行只更新那条，绝不新增重复便签。
 
-1. 用关键字 `distributed-orchestrator` 搜索是否已有消息。
-2. **无** → 新增一条；**有** → 更新该条。
-3. 用命令 **`sticky_note_task`** 发送，消息开头固定为 distributed-orchestrator, 不超过100个字符， 比如：
+1. **定位既有便签（稳定幂等键）**：用固定前缀 `distributed-orchestrator` 搜索本项目的便签。
+   - **恰好 1 条** → 记住其 id，走更新。
+   - **0 条** → 新增一条。
+   - **多于 1 条**（历史遗留/并发导致的重复）→ 视为异常：**只更新最新的一条**，
+     并将其余重复便签删除/归档，收敛回「唯一一条」的不变式；不得再新增。
+2. 用命令 **`sticky_note_task`** 发送/更新，消息开头固定为 distributed-orchestrator, 不超过100个字符， 比如：
    ```
    distributed-orchestrator has submit design V<x>, total score: <yyy>
    或者
