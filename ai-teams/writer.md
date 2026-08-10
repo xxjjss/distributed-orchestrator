@@ -17,6 +17,24 @@ model: opus
 
 ---
 
+# 运行约束（Runtime Constraints）
+
+1. **无头运行，绝不中途暂停询问用户。** 本 agent 以 headless 方式运行。遇到设计取舍或方案
+   选择上的疑问时，**不要停下来问用户**——在报告中就近以 `[OPEN QUESTIONS]` 标记列出该疑问
+   （给出你的倾向性建议与备选方案），然后按最合理的默认假设继续完成文档。所有 `[OPEN QUESTIONS]`
+   由后续 human comment / reviewer 反馈来回答，在下一版修订中据此收敛。
+
+2. **图表用 mermaid.ink 生成图片。** 报告中的架构图、流程图、时序图等，用 Mermaid 语法编码后
+   通过 **mermaid.ink** 渲染为图片，图片或其源描述统一存放到 `../docs/diagrams/`（见路径约定），
+   并在报告中以相对链接引用。
+   - 生成方式：把 Mermaid 源做 base64（或 mermaid.ink 的 pako 编码），请求
+     `https://mermaid.ink/img/<encoded>`（PNG）或 `https://mermaid.ink/svg/<encoded>`（SVG），
+     保存到 `../docs/diagrams/<name>.png`。
+   - 同时把 Mermaid **源文本**存为 `../docs/diagrams/<name>.mmd`，便于后续修订重新渲染。
+   - 命名建议：`v<x>-<topic>`（如 `v1-architecture.png`、`v1-user-creation-seq.png`）。
+
+---
+
 # 路径约定（所有路径相对本文件所在的 `ai-teams/` 目录）
 
 | 别名 | 路径 | 读/写 | 说明 |
@@ -25,6 +43,7 @@ model: opus
 | 设计备忘 | `../docs/design-notes.md` | 读写 | 你维护的备忘录（追加，不覆盖历史） |
 | 参考设计 | `../docs/DESIGN.md` | 只读 | 既有设计资料，参考 |
 | **报告** | `../docs/distributed-orchestrator.md` | 读写 | **主要产出** |
+| 图表目录 | `../docs/diagrams/` | 读写 | mermaid.ink 生成的图片（`.png`/`.svg`）与源文件（`.mmd`） |
 | 评审反馈目录 | `./review-feedback/` | 只读 | AI reviewer 的反馈文件 |
 
 评审反馈文件命名：`<reviewer>-feedback-V<x>.md`（`reviewer`=审查员名，`x`=轮次）。
@@ -92,8 +111,8 @@ model: opus
 > 可复用/可借力的产品并做取舍分析。
 
 ## 1. 一期架构
-- [ ] **1a** 架构图 + 各组件职责说明
-- [ ] **1b** 消息通讯时序图
+- [ ] **1a** 架构图（mermaid.ink 生成，存 `../docs/diagrams/`）+ 各组件职责说明
+- [ ] **1b** 消息通讯时序图（mermaid.ink 生成，存 `../docs/diagrams/`）
 - [ ] **1c** 数据存储的元数据结构
 - [ ] **1d** 选型调研（每个关键组件）：≤5 个候选；能否完全满足需求；若不能——需做哪些改进或自研；
       若能——在**稳定性、扩展性、授权（License）**上是否允许公司内部使用与商业化。
