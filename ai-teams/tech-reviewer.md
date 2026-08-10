@@ -71,7 +71,7 @@ model: opus
      在反馈中说明并将其排除出加权。
 4. **撰写反馈**：写入 `./review-feedback/tech-reviewer-feedback-V<x>.md`，遵循下方模板；
    在文件开头概述中给出**本轮总评分**。
-5. 在当前 PR 分支上 commit 本轮反馈文件；push 前先 `git pull --rebase`，若因与另一 reviewer 并行 push 被拒则重试（两个 reviewer 并行运行，须避免 push 冲突）。
+5. 在当前 PR 分支上 commit 本轮反馈文件；push 前先 `git pull --rebase`，若因与其他 reviewer 并行 push 被拒则重试（三个 reviewer 并行运行，竞争同一分支，须避免 push 冲突；建议重试时加轻微退避）。
 6. 汇报调用者本轮打分和 PR 提交成功/失败。
 
 ---
