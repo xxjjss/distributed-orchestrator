@@ -23,7 +23,14 @@ model: opus
    （给出你的倾向性建议与备选方案），然后按最合理的默认假设继续完成文档。所有 `[OPEN QUESTIONS]`
    由后续 human comment / reviewer 反馈来回答，在下一版修订中据此收敛。
 
-2. **图表用 mermaid.ink 生成图片。** 报告中的架构图、流程图、时序图等，用 Mermaid 语法编码后
+2. **所有 GitHub CLI 操作一律用 `ghx`，绝不用裸 `gh`。** 本项目 repo 属个人账号
+   `xxjjss`，默认 `gh` 身份是 Enterprise Managed User，对本 repo 无权限、会以
+   `Unauthorized: As an Enterprise Managed User...` 失败。`ghx` 是 shell 函数
+   （`GH_TOKEN="$XXJJSS_GITHUB_TOKEN" gh "$@"`，定义于 `~/.zshrc`），以 `xxjjss`
+   身份认证。**下文所有出现 `gh ...` 之处均应读作 `ghx ...`**（`ghx pr list`、
+   `ghx pr create`、`ghx api ...` 等）。
+
+3. **图表用 mermaid.ink 生成图片。** 报告中的架构图、流程图、时序图等，用 Mermaid 语法编码后
    通过 **mermaid.ink** 渲染为图片，图片或其源描述统一存放到 `../docs/diagrams/`（见路径约定），
    并在报告中以相对链接引用。
    - 生成方式：把 Mermaid 源做 base64（或 mermaid.ink 的 pako 编码），请求
@@ -54,18 +61,18 @@ model: opus
 先读取两个**状态维度**，再据下表选择模式——这样每种组合都有唯一落点，重复唤醒不会产生重复副作用（幂等）：
 
 - **报告维度**：读「报告」文件是否有实质内容（`report_exists`）。
-- **PR 维度**：检查当前 branch 是否存在指向 `main` 的 **opened** PR（`gh pr list --base main --state open --head <branch>`）（`pr_exists`）。
+- **PR 维度**：检查当前 branch 是否存在指向 `main` 的 **opened** PR（`ghx pr list --base main --state open --head <branch>`）（`pr_exists`）。
 
 | 报告 | PR | 模式 | 说明 |
 |------|----|------|------|
 | 空 | 无 | **模式 A：首次生成** | 全新开始：写文档 → 建 PR。 |
-| 空 | **有** | **模式 A：首次生成（复用 PR）** | 文档尚未写、但 PR 已存在（例如 PR 由他人/前置流程先建好）。写文档后**复用**该 opened PR，**绝不重复 `gh pr create`**——push 到分支即更新该 PR。 |
+| 空 | **有** | **模式 A：首次生成（复用 PR）** | 文档尚未写、但 PR 已存在（例如 PR 由他人/前置流程先建好）。写文档后**复用**该 opened PR，**绝不重复 `ghx pr create`**——push 到分支即更新该 PR。 |
 | 非空 | 有 | **模式 B：迭代修订** | 正常迭代：处理反馈、提交修订。 |
 | 非空 | 无 | **模式 B：迭代修订（先补建 PR）** | 首轮已写出文档但建 PR 失败 → 走模式 B step 0 补建 PR，**不重新生成文档**。 |
 
 判断依据与护栏：
 - **模式由「报告是否已生成」决定**（决定是否要写文档），**PR 的有无决定是「新建」还是「复用」PR**——两者正交，不可互相覆盖。
-- **建 PR 前必须先查 opened PR 是否已存在**：存在则复用（push 更新即可），不存在才 `gh pr create`。
+- **建 PR 前必须先查 opened PR 是否已存在**：存在则复用（push 更新即可），不存在才 `ghx pr create`。
   GitHub 对同一 `head→base` 只允许一个 opened PR，重复创建会失败。
   > 关键场景：首轮已写出文档但 PR 提交失败 → 下轮「报告非空、却无 PR」，走**模式 B** step 0 补建 PR。
   > 反向场景：文档尚未写、但分支上已有 opened PR → 走**模式 A（复用 PR）**，写完文档 push 更新，不再新建。
@@ -82,9 +89,9 @@ model: opus
 3. 将本轮的调研要点、关键决策、注意事项归纳写入「设计备忘」。
 4. commit 并 push 本轮变更。此为版本 **V1**。
 5. **确保 PR 存在（不重复创建）**：先查当前 branch 是否已有指向 `main` 的 opened PR
-   （`gh pr list --base main --state open --head <branch>`）。
-   - **已存在** → 复用它，push 已在第 4 步更新该 PR，不再 `gh pr create`。
-   - **不存在** → `gh pr create` 建指向 `main` 的 PR；创建/推送失败则记录原因、保留本地提交并在下一轮重试。
+   （`ghx pr list --base main --state open --head <branch>`）。
+   - **已存在** → 复用它，push 已在第 4 步更新该 PR，不再 `ghx pr create`。
+   - **不存在** → `ghx pr create` 建指向 `main` 的 PR；创建/推送失败则记录原因、保留本地提交并在下一轮重试。
 6. 完成返回调用者当前版本号与 PR url；若 PR 失败则返回失败原因（本地 commit 保留）。
 
 ## 模式 B：迭代修订
@@ -103,7 +110,7 @@ model: opus
      - **技术可行** → 分析实现成本与技术取舍，在修订中给出对比与明确结论（采纳 / 不采纳）。
    - **问题或提示类** → 以 **Q&A** 形式作答；若是提示，据此做进一步研究/思考并在修订中回馈。
    - 每条回应完成后，**将该 comment 标记为已处理**：
-     - **review thread** → resolve 该 thread（`gh` API：`resolveReviewThread`）。
+     - **review thread** → resolve 该 thread（`ghx api` GraphQL：`resolveReviewThread`）。
      - **issue-style comment** → 回复 `Resolved in V<x>`（附一句结论），并可加 👍 reaction 作为已处理标记。
 3. **回应 AI reviewer 反馈**：
    - 在「评审反馈目录」中，对**每个 reviewer 只读其最新轮次**的 `<reviewer>-feedback-V<x>.md`。

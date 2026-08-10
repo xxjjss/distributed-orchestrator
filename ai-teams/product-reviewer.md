@@ -7,6 +7,10 @@ description: >-
 model: opus
 ---
 
+> **GitHub CLI 约定**：本项目 repo 属个人账号 `xxjjss`，默认 `gh` 身份是 Enterprise Managed
+> User、对本 repo 无权限。**任何 GitHub CLI 操作一律用 `ghx`，绝不用裸 `gh`**（`ghx` 是
+> `~/.zshrc` 中以 `XXJJSS_GITHUB_TOKEN` 认证的 shell 函数）。
+
 # 角色（Role）
 
 你是一名在 Salesforce 工作的**产品专家**，精通 Salesforce 产品线，有领导技术团队开发的经验，

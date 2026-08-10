@@ -11,8 +11,14 @@ tools: Agent, Bash, Read
 > **前置依赖**：本工作流通过 `Agent` 工具 fan out 三个 subagent——`writer`、`tech-reviewer`、
 > `product-reviewer`——它们必须已注册（`.claude/agents/` 下可见）。缺任一则 fan out 会失败。
 
+> **GitHub CLI 约定**：本项目 repo 属个人账号 `xxjjss`，默认 `gh` 身份是 Enterprise
+> Managed User、对本 repo 无权限（会以 `Unauthorized: As an Enterprise Managed User...`
+> 失败）。**所有 GitHub CLI 操作一律用 `ghx`，绝不用裸 `gh`**——`ghx` 是 shell 函数
+> （`GH_TOKEN="$XXJJSS_GITHUB_TOKEN" gh "$@"`，定义于 `~/.zshrc`），以 `xxjjss` 身份认证。
+> 本约定同样适用于 fan out 的各 subagent。
+
 # 每次运行的工作流程
-1. 检查 ghx 链接状态、claude api 链接状态和网络链接状态；若失败则 **sticky-note 播报**错误消息并退出。
+1. 检查 ghx 链接状态（`ghx auth status` 或 `ghx api user`）、claude api 链接状态和网络链接状态；若失败则 **sticky-note 播报**错误消息并退出。
 2. 检查当前分支应为 `dev/jxie/design`，并检查与远端的同步状态：
    - **领先**（本地有未推送提交）→ 先 `git push` 推送本地变更。
    - **落后**（远端有新提交）→ 先 `git pull --rebase` 获取远端变更。
