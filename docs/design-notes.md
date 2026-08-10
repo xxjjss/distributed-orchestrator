@@ -146,3 +146,28 @@
 
 ### 尚待回答（更新）
 - **确认 matrix 身份机制 (a)/(b)**（D3 的唯一 OPEN QUESTION，用户将进一步确认）。
+
+---
+
+## 2026-08-09 — V1 报告写作完成（writer，重试成功）
+
+上一次运行在写作阶段 API 超时；本次恢复并完成 `distributed-orchestrator.md` 首版（V1）。
+
+**写作策略**：分段 append 落盘（骨架/§0-1a → §1b-1d → §2 → §3-5+附录），控制单次工具输出体量，避免再次超时。
+
+**报告结构落点**（对齐产出清单）：
+- §0 执行摘要 + 术语表：钉死 D1–D5 术语，防全文漂移。
+- §1a 架构图（复用 `v1-architecture.png`）+ 五层组件职责表 + 交付边界。
+- §1b 时序图（`v1-message-seq.png`）+ Watcher 五要素契约 + event envelope（D4）。
+- §1c DynamoDB 单表元数据结构 + 结构化/非结构化划分 + D1/D2 新增字段。
+- §1d 选型调研：组件 A（持久化内核：LangGraph/DBOS/Temporal/SFN/自研，5 候选）、B（matrix/ECS/GH Actions 托管）、C（MCP/OAuth 代持/SF Identity 鉴权）、D（watch-pr/SQS/EventBridge/Streams 信号）。每组给 License + 稳定性/扩展性/商用判断。
+- §2 竞品对比（durable execution / LLM agent / 通用编排 / AI 托管 / 内部现状 五类）+ 四条护城河 + 商业前景 + FDE 落地闭环 + SF 产品耦合表。
+- §3 一期能力交付表 + affinity 调度图（`v1-affinity-scheduling.png`）+ 度量方案（3–5 人试点、保守判据 ≥1.5×）+ 成本依赖 + 一期不做清单；二期/远期蓝图。
+- §4 风险登记 R1–R7；§5 待决问题 OQ-1/2/3；附录决策追溯。
+
+**报告内新增 OPEN QUESTIONS（写进 §5，待 reviewer/human 收敛）**：
+- OQ-1：合规能否引入 MIT LangGraph/DBOS（一期成本最大变量）。
+- OQ-2：matrix 身份机制 (a)/(b)（承接 D3 遗留 OPEN QUESTION）。
+- OQ-3：商业化路径 独立 SaaS vs 内嵌 Agentforce/Platform（倾向后者）。
+
+**版本**：V1。commit + PR（ghx，指向 main）。未 merge（人类决定）。
