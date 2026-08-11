@@ -36,21 +36,25 @@
 
 一期系统分五层：UI 层、编排层（**本项目核心交付**）、Worker 层、数据层、外部系统。核心命题是「**workflow 引擎是唯一懂进度的组件，worker 是可被随时拉起的纯函数**」——这条约束是幂等与断点续跑得以成立的支点。
 
+**一期落地形态 = 本机安装的开发者工具 + 简易 installer（回应 human comment）**：一期主要落地在**个人电脑本地**，作为研发效率提升工具。为降低门槛，一期交付一个**简易 installer**——一键安装本工具的依赖（UI 面板 + 编排层全部脚本 + 本机 StateStore/SQLite + watcher/job-scheduler），并**引导用户完成配置**（MCP 连接检查、输入源选择、云表凭据、affinity 默认值）。这把「攒工具链」的高门槛（PP5）降为「跑一个安装脚本」，是一期能被团队多人复现的前提。
+
+**关键成本洞察 — token 只在 worker 层产生（回应 human comment，贯穿本表）**：五层中**只有 Worker 层是 LLM/token 的实际消费主力**；UI 层与编排层的 watcher/signal/路由器都是**确定逻辑、纯程序/纯脚本实现，不消耗 token**；编排层 workflow 引擎唯一的 AI 介入是「读上下文、拉起 worker」，token 消耗极小、可用**便宜的 Sonnet 档甚至规则**实现。这条洞察直接支撑 [project-analyst §3a](./distributed-orchestrator-project-analyst.md#3a-一期重点面向内部-engineer) 的 token 账单测算——**优化 token 成本 = 优化 worker 层的模型选择与步数，与编排层无关**。
+
 ![一期架构图](diagrams/v2-architecture.png)
 
 > 源文件：`diagrams/v2-architecture.mmd`（可重渲染）。相较 V1：Watcher 采集层显式加了**监听 GUS 状态**的连线；`agent-work-manager` 改称 **workflow 引擎**并标注"可编排多 worker / 可嵌套 workflow"；编排层新增**韧性护栏**（熔断/限流/背压/预算）节点；云端 worker 标注"云端跑时用户可关机"。
 
 | 层 / 组件 | 职责 | 一期交付边界 |
 |---|---|---|
-| **UI 层 — Sticky-Note 面板** | 人机界面：拉取输入（当前是 GUS WI）、驱动工作流、及时通知工作流状态与待办/待审批。基于现有 `tcm-toolkit/sticky-note` 扩展。 | 一期做「输入抽象化」（从写死 GUS WI 抽象成可配置输入源）；图形化流程编辑锁远期。 |
-| **UI 层 — 工作流通知 / 审批入口** | workflow 引擎回叫的落点：告诉用户"**该你做动作了**"——即需要**人做决定、审查、签收（承担责任）**。 | 一期做通知 + 审批点 + 见 §2.6 的部分失败呈现与一键 Reconnect；**图形化拖拽编辑、富交互面板**（多面板联动、拖拽改状态机、可视化审计钻取）明确留后续。 |
-| **编排层 — workflow 引擎（agent-work-manager）** | **唯一懂进度**。主循环：扫描未完成任务 → 用 **CAS（Compare-And-Swap）抢 lease** → 读上下文 → 拉起 worker → 收 output 跑 route → 原子写下一步。守护职责：把卡住的任务重新变成可认领（重置 lease / bump attemptCount / 改 progress），业务逻辑永远由 worker 跑。**一个 workflow 可编排多个 worker，也可把其它 workflow 作为子节点嵌套**。 | **一期核心自研。** 云端引擎认领 `affinity=cloud`，本机 daemon 认领 `affinity=machine:自己`。 |
-| **编排层 — 路由器（Router）** | 把"用户想要的功能"映射到具体 handler。 | **一期降级为注册表 + 显式路由 + 关键字匹配**；「discover agent 自主语义找 handler」是开放研究问题，锁远期。 |
-| **编排层 — Watcher 采集层** | 监听外部信号源，**边缘触发（edge-triggered）去重**——仅状态跃迁时 fire。`watch-pr` 为参考实现，一期泛化为通用 Watcher 契约。**有 webhook 的源（GitHub/Slack）优先 webhook/事件推送，仅无 webhook 的源退回轮询**（回应 tech reviewer）。 | 一期覆盖若干预定义 watcher，例如**监听 Slack message、PR 状态、CI/CD 状态、GUS 状态**等；watcher 注册中心留后续。 |
-| **编排层 — signal() 标准回调** | Watcher 不直接拉 worker，而是把统一 **envelope** 通过 `signal(workspace, envelope)` 喂给编排器（内部落到具体 `workid`/`branchId`），把 `waiting → new`，由引擎下一轮自然拉起。**投递以 dedup-key 做条件写保证幂等**（见 §2.2）。 | 一期定死 envelope schema + `signal()` 契约 + dedup 表。 |
-| **编排层 — 韧性护栏** | 熔断 / 限流 / 背压 / bulkhead / per-workspace 预算，防止 fan-out 的 LLM 调用在下游故障时烧 token 放大故障。 | **本版新增，见 §2.1。** |
-| **Worker 层 — 本机 worker** | `affinity=machine`，复用本机 MCP 登录态、以开发者本人身份调外部系统。**一期全自动脱机的主力。** | 一期主力。 |
-| **Worker 层 — 云端 worker** | `affinity=cloud`，跑在 `matrix`/`falcon`。**worker 在云端跑时，用户即可关机断网**（这正是"异步/脱机驱动"的核心价值）。以用户身份操作外部系统取决于 matrix 身份机制（OQ-2）。 | 能力边界随外部依赖，标注风险。 |
+| **UI 层 — Sticky-Note 面板** | 人机界面：拉取输入（当前是 GUS WI）、驱动工作流、及时通知工作流状态与待办/待审批。基于现有 `tcm-toolkit/sticky-note` 扩展。**确定逻辑、纯程序实现，不消耗 token。** | 一期做「输入抽象化」——**提供输入源接口**：部分输入源允许使用者配置（选 GUS/Jira/…），同时提供**输入源开发接口**供后续扩展或用户二次开发（回应 human comment）；图形化流程编辑锁远期。 |
+| **UI 层 — 工作流通知 / 审批入口** | workflow 引擎回叫的落点：告诉用户"**该你做动作了**"——即需要**人做决定、审查、签收（承担责任）**。**确定逻辑、纯程序实现，不消耗 token。** | 一期做通知 + 审批点 + 见 §2.6 的部分失败呈现与一键 Reconnect；**图形化拖拽编辑、富交互面板**（多面板联动、拖拽改状态机、可视化审计钻取）明确留后续。 |
+| **编排层 — workflow 引擎（agent-work-manager）** | **唯一懂进度**。主循环：扫描未完成任务 → 用 **CAS（Compare-And-Swap）抢 lease** → 读上下文 → 拉起 worker → 收 output 跑 route → 原子写下一步。守护职责：把卡住的任务重新变成可认领（重置 lease / bump attemptCount / 改 progress），业务逻辑永远由 worker 跑。**一个 workflow 可编排多个 worker，也可把其它 workflow 作为子节点嵌套**。**本层唯一 AI 介入是「读上下文、拉起 worker」，token 消耗极小——可用便宜的 Sonnet 档甚至规则实现（回应 human comment）。** | **一期核心自研。** 云端引擎认领 `affinity=cloud`，本机 daemon 认领 `affinity=machine:自己`。 |
+| **编排层 — 路由器（Router）** | 把"用户想要的功能"映射到具体 handler。**一期确定逻辑、纯脚本实现，不消耗 token。** | **一期降级为注册表 + 显式路由 + 关键字匹配**；「discover agent 自主语义找 handler」是开放研究问题，锁远期（远期语义路由才引入 LLM）。 |
+| **编排层 — Watcher 采集层** | 监听外部信号源，**边缘触发（edge-triggered）去重**——仅状态跃迁时 fire。`watch-pr` 为参考实现，一期泛化为通用 Watcher 契约。**有 webhook 的源（GitHub/Slack）优先 webhook/事件推送，仅无 webhook 的源退回轮询**（回应 tech reviewer）。**纯脚本实现的钩子，不消耗 token（回应 human comment）。** | 一期覆盖若干预定义 watcher，例如**监听 Slack message、PR 状态、CI/CD 状态、GUS 状态**等；watcher 注册中心留后续。 |
+| **编排层 — signal() 标准回调** | Watcher 不直接拉 worker，而是把统一 **envelope** 通过 `signal(workspace, envelope)` 喂给编排器（内部落到具体 `workid`/`branchId`），把 `waiting → new`，由引擎下一轮自然拉起。**投递以 dedup-key 做条件写保证幂等**（见 §2.2）。**纯脚本实现的钩子，不消耗 token。** | 一期定死 envelope schema + `signal()` 契约 + dedup 表。 |
+| **编排层 — 韧性护栏** | 熔断 / 限流 / 背压 / bulkhead / per-workspace 预算，防止 fan-out 的 LLM 调用在下游故障时烧 token 放大故障。**纯脚本 + 条件写实现，不消耗 token。** | **本版新增，见 §2.1。** |
+| **Worker 层 — 本机 worker** | `affinity=machine`，复用本机 MCP 登录态、以开发者本人身份调外部系统。**一期全自动脱机的主力。这里是实际工作的 AI 组件，是 token 的实际消费主力（回应 human comment）——成本优化的焦点全在此层（模型选择/步数/prompt caching），见 project-analyst §3a。** | 一期主力。 |
+| **Worker 层 — 云端 worker** | `affinity=cloud`，跑在 `matrix`/`falcon`。**worker 在云端跑时，用户即可关机断网**（这正是"异步/脱机驱动"的核心价值）。以用户身份操作外部系统取决于 matrix 身份机制（OQ-2）。**同为 AI 组件，token 消费主力。** | 能力边界随外部依赖，标注风险。 |
 | **数据层 — StateStore 抽象接口** | 状态持久化。**云端实现 = DynamoDB 单表（单一事实源）**；本机实现 = SQLite/文件（仅作性能优化 checkpoint，非事实源）。同一接口两种实现，让"本机/云端统一编排"真正成立。 | 一期做 DynamoDB 实现 + StateStore 接口；本机 SQLite 为可选优化。 |
 | **外部系统（经 MCP adaptor）** | GUS WI / Slack / GitHub-PR / 文档-CI，均以**开发者身份**经 MCP adaptor 访问。 | 一期复用 MCP，不自建鉴权（D2）。 |
 
@@ -214,9 +218,20 @@
 | **在飞 in-progress 计数**（背压） | DynamoDB **共享计数项**（按 `submitter` 分片：`PK=INFLIGHT#<submitter>#<shard>`） | 认领任务时原子 `ADD +1`、完成/失败时 `ADD -1`；读聚合分片求和判阈值 | **按 submitter + shard 分片**降低单项写热点 |
 | **令牌桶配额**（限流） | DynamoDB 共享桶项（per-dependency） | 原子递减 + 定时回填（或用时间戳惰性补桶） | 按 dependency 分项 |
 
-- **代价与取舍**：共享落盘让护栏在分布式下**真正生效**（不被实例数放大失效），代价是每次认领/放行多一次条件写——这与主循环本就高频点写同源，且 §1c 已论证 DynamoDB 条件写是我们的强项原语。**按 submitter/dependency 分片**把这次额外写分散，避免自身成为热点。
+- **代价与取舍（量化，回应 product reviewer engineering P-B）**：共享落盘让护栏在分布式下**真正生效**（不被实例数放大失效），代价是每次认领/放行多一次条件写。**成本量化**：每步认领新增 **1 次条件写 + 1 次原子 ADD**（约 2 个 WCU/步）；以 project-analyst §3a 一期试点 15–25 workspace × 30–80 步估算，护栏额外写 ≈ **数千–低万次 WCU/月**，DynamoDB on-demand 写 ≈ $1.25/百万写请求 → **月增量成本 < $1，可忽略**（相对 token 账单是零头）。**延迟量化**：DynamoDB 单项条件写 p50 ≈ 个位数毫秒、p99 ≈ 10–20ms（同区域），叠加在本就存在的主循环点写上——即**每步 +个位数毫秒量级，对数小时的 worker 步不可感知**。这条增量已并入 project-analyst §3a 云资源月成本（明确标注「含护栏共享写」）。**按 submitter/dependency 分片**把额外写分散，避免自身成为热点。
+- **`GUARD#<dep>` 故障风暴写热点（回应 tech reviewer V3 视角 3.2）**：熔断计数按 dependency 分项天然分散，但**同一 dependency 的高频故障计数仍集中在单一 PK**——故障风暴（大量任务同时撞同一下游故障）下 `GUARD#<dep>` 的连续失败计数 CAS 会成为瞬时写热点。缓解：对 `GUARD#<dep>` 再按**时间桶 + 实例分片**写（`GUARD#<dep>#<epochMinute>#<instanceShard>`）、读时聚合，把单点 CAS 打散；故障态短暂（cooldown 内即转 half-open），可接受。借鉴 [resilience4j](https://github.com/resilience4j/resilience4j) 的滑动窗口计数（其本身是单 JVM 内存态，分布式共享须自行落盘——本设计已如此）。
 - **half-open 重探测挂到守护层重扫周期（回应 tech V2 残留）**：熔断 `open` 时把相关任务转 `error(retryable=true)` 挂起；守护层**每个重扫周期**检查 `open` 状态的 dependency，到 `cooldown` 后置 `half-open` 并**只放行一个探测任务**——探测成功→`closed` 恢复放行，失败→回 `open` 重新计时。即"下游长期故障的任务靠守护层重扫周期驱动 half-open 重探测"，不依赖额外定时器。
 - **退路**：若共享计数的写成本在压测中过高，退化为**每实例本地配额 = 全局配额 / 实例数**（牺牲精度换零共享写），作为一期简化选项标注。
+
+**在飞计数的 crash-leak 回收（回应 tech reviewer V3 唯一新增工程缺口 P1，视角 2/3）**：
+V3 的在飞计数「认领时 `ADD +1`、完成/失败时 `ADD -1`」有一个**三阶正确性缺口**——若 worker 在 `+1` 之后、`-1` 之前 **crash**（而 crash/关机正是本系统存在的理由），该 shard 的在飞计数会**只增不减泄漏**；多次 crash 后背压阈值被幽灵计数**永久虚高触发（假背压）**，拒绝认领健康任务。根因：**独立计数器不是从记录派生的真相，而是可独立漂移的旁路状态**——这与 CAS lease 有本质区别（lease 的正确性靠「记录存在性 + leaseExpiry」这个真相支撑，天然 crash-safe）。
+
+> **V4 决策：弃用独立在飞计数器，改由守护层从 `GSI2(affinity+progress)` 直接 `Count` 活跃 `in-progress` 记录派生背压真值。** 真相从记录派生 → 天然 crash-safe（crash 的任务其 lease 会过期，被守护层重新计入/回收，计数自动收敛）。代价是一次 GSI `Count` 查询（`Select=COUNT`，不拉回记录体，成本 = 扫描到的记录数 × 0.5 RCU，可按 submitter 分片 Query 降量）。
+
+- **实现**：背压判定改为「守护层周期性 `Query GSI2 where affinity=<pool> and progress=in-progress, Select=COUNT`，按 submitter 分片求和」，用该派生值与阈值比较，而非读独立计数器。
+- **保留计数器的备选**：若压测显示 GSI Count 频率过高，可保留原子计数器**但叠加 lease 过期驱动的周期性 reconcile**（守护层重扫时用 GSI Count 重算 shard 真值、覆盖漂移的计数器）——把计数器降级为「缓存」、GSI Count 为「事实源」。一期默认走前者（派生真值，无缓存一致性负担）。参考 [DynamoDB atomic counters 的已知局限](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html#WorkingWithItems.AtomicCounters)（非幂等、crash 下不可回滚）。
+
+**背压是软上限、非硬保证（显式标注，回应 tech reviewer V3 视角 2/3）**：无论派生 Count 还是分片计数，多实例并发认领下背压阈值判定都是**最终一致读**，存在窗口误差——可能瞬时略超上限后收敛。**一期明确把背压定位为「软上限」（防雪崩的软阀门），而非精确闸门**；需要硬上限的地方（如 per-workspace token 预算）用**单项记录上的 CAS 硬约束**（强一致），不依赖聚合计数。下游消费方不应把背压当精确闸门。
 
 ### 2.2 signal 幂等 / 去重 + fan-out 重放防护（P0）
 
@@ -275,8 +290,8 @@ V1 的"`affinity=machine:X` 且 X 永久离线 → 只告警不拉起"会**永�
 一期主力两条路径给出**明确契约**，而非停在清单：
 
 - **ClaudeCodeAdapter 的结构化 output 解析契约**：`claude -p` 子进程 stdout 会混入日志/思考/非结构化文本，可靠解析是现实难题。契约：
-  1. **约定 sentinel 包裹**：prompt 中强约束 worker 把最终结构化结果输出在**固定哨兵之间**——`<<<ORCH_OUTPUT_BEGIN>>>{json}<<<ORCH_OUTPUT_END>>>`；adapter 只取哨兵间内容做 JSON 解析，忽略其余 stdout（日志）。
-  2. **优先用结构化输出模式**：能用 `--output-format json`（或工具的结构化输出能力）时直接取，sentinel 为兜底。
+  1. **约定 sentinel 包裹 + per-call nonce 防复述（V4 强化，回应 tech reviewer V3 视角 4）**：prompt 中强约束 worker 把最终结构化结果输出在**固定哨兵之间**。V3 用静态哨兵 `<<<ORCH_OUTPUT_BEGIN>>>…<<<ORCH_OUTPUT_END>>>` 有对抗性长尾——worker 是 LLM，可能在思考文本里**复述哨兵字符串本身**（复述 prompt、生成示例）导致 adapter 误取。**V4 契约：每次调用注入一个随机 nonce，哨兵形如 `<<<ORCH_OUTPUT_BEGIN:{nonce}>>>{json}<<<ORCH_OUTPUT_END:{nonce}>>>`，adapter 只认本次注入的 nonce**；同时**取最后一对完整、nonce 匹配的哨兵**（防止前文复述污染）。这把 LLM 复述污染的概率降到可忽略。
+  2. **优先用结构化输出模式**：能用 `--output-format json`（或工具的结构化输出能力）时**作为主路径**直接取，nonce 哨兵仅作兜底——结构化输出模式不受 stdout 文本污染，是最稳妥的路径。
   3. **解析失败 = 显式失败**：哨兵缺失/JSON 非法 → 该步转 `error(retryable=true)`（bump attemptCount 重试一次），连续失败转终态告警，**绝不把半解析结果当成功**。
   4. **进度回传**：子进程按 §2.6 约定周期性打印 `<<<ORCH_PROGRESS>>>{step,tokenSpent}` 行，adapter 转成 `checkpoint()` 续 lease + 更新 `tokenSpent`。
 - **StepFunctionsAdapter 的执行态映射契约**：`StartExecution` 后，SFN 执行态 → 编排器 progress 映射——`RUNNING → in-progress`（轮询/EventBridge 续 lease）、`SUCCEEDED → finished`（取 output 跑 route）、`FAILED/TIMED_OUT/ABORTED → error`（`retryable` 由 SFN 错误类型判定：`States.Timeout`→retryable，业务错误→terminal）。沿用 TCM 50-op 阈值模式选粗/细粒度。
@@ -329,13 +344,29 @@ V1 的"`affinity=machine:X` 且 X 永久离线 → 只告警不拉起"会**永�
 |---|---|---|
 | **Flow Orchestrator** | 平台内、声明式、含人工审批步骤的业务流程编排（面向 Admin/低代码，运行在 Platform 内） | **互补 + 桥接，不替代**。Flow Orchestrator 面向 Platform 内的业务对象与用户，**不为"7×24 无人值守、跨本机/云端、驱动任意 CLI agent（`claude -p`）、断点续跑数小时的开发者工作流"设计**——它没有 lease/affinity/token 预算/脱机续跑这套运行时语义。本项目做**Platform 外的 durable agent 运行时**；桥接方式：把一个编排 workspace 暴露为 Flow 可调用的 async 动作，或 Flow 审批步骤回调本编排器。参考 [Flow Orchestrator 文档](https://help.salesforce.com/s/articleView?id=sf.flow_concepts_orchestrator.htm)。 |
 | **Platform Events** | 平台内事件总线（发布/订阅） | **桥接候选**：可作为 Watcher 的一个 source（订阅 Platform Event → envelope → signal），或本编排器把状态跃迁发布为 Platform Event 供 SF 侧消费。一期不实现，预留 envelope 兼容。 |
-| **Agentforce orchestration** | 造 agent、agent 内的 reasoning/planner | **互补**：Agentforce 解决"造 agent"，本项目解决"让 agent 可靠长跑并被编排"。本编排器可作为 Agentforce Action 的长跑后端（见 project-analyst §2d）。 |
+| **Agentforce orchestration** | 造 agent、agent 内的 reasoning/planner | **互补**：Agentforce 解决"造 agent"，本项目解决"让 agent 可靠长跑并被编排"。本编排器可作为 Agentforce Action 的长跑后端（见 project-analyst §2d、OQ-5）。 |
+
+**AgentforceActionAdapter 契约 + 与非确定性 planner 的共存（V4，回应 product reviewer SF-architect V3 残留 #1/#3，收敛为 OQ-5）**：
+V3 的 Agentforce 技术桥停在「Action 回调走 Platform Event 还是 notification」的"或"，且未回答一个更深的正确性问题——**编排器靠 stateFingerprint + checkpoint/replay 假设「同一步骤可安全重放得等价结果」，但 Agentforce planner 是非确定性推理，Agent session 本身不是可倒带的状态机**。V4 给出设计原则（一期不实现，作为 AgentforceActionAdapter 的契约草图 + OQ-5 待战略层裁决）：
+
+- **把 Agentforce Action 当「至多一次触发、结果异步回调收敛」的黑盒**：编排器 `submit` 触发一个 Agentforce Action 后，**不把 Agent session 内部的推理纳入 replay 校验**——session 内部的非确定性推理由 Agentforce 自己负责，编排器只在其边界上做幂等（触发用 dedup-key 保证至多一次，结果通过异步回调收敛）。这样两套状态模型（我们的可倒带 checkpoint vs Agentforce 的不可倒带 session）在**边界解耦**，不互相污染。
+- **回调统一走 Platform Event（建议结论，非"或"）**：Action 完成/超时的异步回调**统一走 Platform Event**——与本项目 Watcher/envelope 设计天然对齐（Platform Event 作 Watcher 源 → envelope → signal），避免 Agentforce notification 与 Platform Event 双通道。
+- **`workid` ↔ Agentforce session 生命周期映射**：编排器 `workid`（长跑、可续跑）与 Agentforce session（对话态、可能短命）**不是一一对应**——一个 `workid` 可跨多次 Action 触发；映射关系在 adapter 层维护为「`workid` → 最近一次触发的 session/execution id」，session 结束不等于 workid 结束。
+- **stateFingerprint 扩展校验 Prompt 版本**：远期若接入 Prompt Builder，stateFingerprint 除校验「代码/状态图版本」外，应**同时校验 Prompt 模板版本**——解决"prompt 改了、code 没改"的隐性非确定性。
+- 以上均列为 **OQ-5**（project-analyst §5），交 Agentforce 平台架构团队 + 本项目 owner 联合裁决，deadline 放闸门 B 前。
+
+> **平台约束占位数字（回应 product reviewer 建议，与 token 账单「待核准」处理方式对称）**：三个桥接点各有平台侧硬约束，一期不实现、仅占位待核准——Platform Event 发布频率上限、Flow invocable action 同步执行时限、Agentforce Action 会话内超时。实现前须查 [Platform Events 限制](https://developer.salesforce.com/docs/atlas.en-us.platform_events.meta/platform_events/platform_events_intro.htm) 核准具体数字。
 
 **Einstein Trust Layer（商业化硬门槛）**：一旦 LLM worker 操作**客户数据**，必过 [Einstein Trust Layer](https://www.salesforce.com/products/platform/trusted-ai/)（脱敏/审计/零留存/毒性检测）。一期只处理**公司内部研发数据（GUS/PR）**，不触客户数据，故一期不接；但**商业化/FDE 带客户场景前必须接入**——列为商业化前置门槛（见 project-analyst 风险登记）。
 
 **Hyperforce 多租户 / 数据驻留**：共享云表当前仅由 `submitter` 做粗隔离，够一期内部用；走向 Platform/多租户商用时须满足 Hyperforce 的**租户隔离 + 数据驻留**合规——这是比 submitter 隔离更大的架构改造（可能需 per-tenant 表/账户 + 驻留区域路由），在 §4 与 project-analyst 远期架构显式点名。**对 StateStore 抽象的返工面（回应 tech reviewer V2）**：per-submitter → per-tenant 意味着 StateStore 接口需加 `tenantId` 维度（PK 前缀或独立表/账户 + 驻留路由），是 StateStore Provider 的一次扩展而非重写——因一期已把持久化收敛为接口（§4），返工集中在 Provider 实现层，抽象层可复用。
 
 **Platform Event → signal 的租户上下文映射（回应 tech reviewer V2 P2）**：远期若订阅 Platform Event 作为 Watcher 源，事件的 `tenantId`/`OrgId` 须映射到编排器的隔离键——一期 `submitter`（个人身份）在多租户下升级为 `(tenantId, submitter)` 复合键，envelope 增 `tenantId` 字段透传，signal 落库时按复合键分区。一期不实现，预留 envelope 字段兼容。
+
+**Data Cloud / Prompt Builder 集成方向草图（V4 补，回应 product reviewer SF-architect V3 残留 #2，远期方向性）**：
+- **Data Cloud（zero-copy ingestion）**：编排器自产的 append-only 审计轨迹（每 workspace 的 progress/介入率/token/失败模式）是天然的产品分析数据源——远期作为 [Data Cloud zero-copy](https://help.salesforce.com/s/articleView?id=sf.c360_a_zero_copy_data_federation.htm) 的联邦数据源接入，与 project-analyst §2c「反馈闭环工具化」天然衔接，无需搬数据即可在 Data Cloud/Tableau 侧分析。
+- **Prompt Builder**：远期 worker 的 prompt 若由 [Prompt Builder](https://help.salesforce.com/s/articleView?id=sf.prompt_builder_overview.htm) 托管，stateFingerprint 扩展为「代码版本 + 状态图版本 + Prompt 模板版本」三元组，把"prompt 悄悄改了"纳入非确定性检测。
+- 一期均不实现；仅给方向，避免"底座候选"叙事在集成路径上完全空白。
 
 ---
 
@@ -354,7 +385,17 @@ FDE 把编排器带到客户现场时，需要替换的远不止一个 StateStor
 | **托管** | ✅ Runtime Adapter 接口（§2.4） | ❌ matrix/falcon 实现（现场换 ECS/自建 Provider） |
 | 输入源 | ✅ 输入抽象接口 | ❌ GUS WI 实现（现场换 Jira/客户系统 Provider） |
 
-**设计原则**：把"内部专属"三层（持久化 / 鉴权 / 托管 / 输入源）全部收敛到**接口 + 可插拔 Provider**，云端一套实现、客户现场另一套实现。参考同为"背景任务 + 人机闭环 + 可移植运行时"的开源分层：[Inngest](https://github.com/inngest/inngest)、[Trigger.dev](https://github.com/triggerdotdev/trigger.dev) 的 SDK/Provider 分层。FDE 试点判据加一条"**非 Salesforce-internal 环境冒烟**"（干净 org / 空环境跑通最小内核），提前暴露可移植性债务。
+**设计原则**：把"内部专属"三层（持久化 / 鉴权 / 托管 / 输入源）全部收敛到**接口 + 可插拔 Provider**，云端一套实现、客户现场另一套实现。参考同为"背景任务 + 人机闭环 + 可移植运行时"的开源分层：[Inngest](https://github.com/inngest/inngest)、[Trigger.dev](https://github.com/triggerdotdev/trigger.dev) 的 SDK/Provider 分层；worker↔引擎解耦参考 [Camunda Zeebe Job Worker](https://docs.camunda.io/docs/components/concepts/job-workers/) 模式。
+
+**FDE 现场兼容性验证：从「干净 org 冒烟」升级为「dirty org 冒烟」（V4，回应 product FDE reviewer V3 残留 #1）**：
+V3 的"干净/空 org 冒烟"被 product reviewer 正确指出是**更弱替代**——空 org 天然不含客户既有 Apex 触发器/Flow/自定义对象，恰恰**测不出编排器与客户既有自动化是否打架**（触发器递归、Flow 与 Watcher 事件顺序竞态、自定义对象命名冲突）。V4 把判据升级为：
+
+> **二期 FDE 培训前，至少完成一次「dirty org 冒烟」**：用 Scratch Org + 预装一个**含自定义对象 / Flow / Apex 触发器的常见 AppExchange 包**做近似真实环境（成本远低于找真实客户 Org，但能暴露冲突面），跑通最小内核并产出兼容性结论。
+
+- 该判据明确排入**二期 FDE 培训前** deadline（不再挂"未来问题"含糊处理），成本并入 project-analyst §3b 的二期 Provider 化预算。
+- **打包/交付形态 + 现场支持模型（FDE 落地成本，二期随试点补充）**：一期 installer 面向本机开发者；FDE 现场部署整套栈（Docker / managed package / 安装脚本）与 Provider 层 bug 的 L2 支持/escalation 路径，列为**二期 FDE 试点须定义项**，避免账面 Provider 化人周低估真实落地成本。
+
+**多租户复合键与分片键的交互（远期返工面，回应 tech reviewer V3 视角 6.2）**：走向 Platform 多租户时，§3 的隔离键 `submitter` 升级为 `(tenantId, submitter)` 复合键——这会与 §1c 热分区分片键（`workid#<branchShard>`）、§2.1 在飞/护栏分片键（`INFLIGHT#<submitter>#<shard>`、`GUARD#<dep>`）产生**交互**：多租户下这些分片键都需再纳入 `tenantId` 维度（如 `INFLIGHT#<tenantId>#<submitter>#<shard>`）。这是 StateStore Provider 的一次扩展（PK 前缀加维度），非抽象层重写；一期不展开，在此连一句边界，实现阶段随多租户改造一并处理。
 
 ---
 
@@ -371,10 +412,24 @@ FDE 把编排器带到客户现场时，需要替换的远不止一个 StateStor
 
 - **OQ-1（最高优先）**：合规能否引入 MIT 的 LangGraph/DBOS？决定组件 A 走档位 1（增功能）还是档位 2（自研内核）——一期成本与 token 账单最大变量。**立项前置阻塞项**，需 owner + deadline。
 - **OQ-2（D3）**：`matrix` 的"本机个人鉴权 → 云端 worker"是 (a) 调用门禁还是 (b) 身份代持？决定 `affinity=cloud` worker 能否以用户身份操作外部系统。工作假设 (b)，待向 matrix 团队确认。
+- **OQ-5（V4 新增，§3）**：Agentforce 技术桥的两个悬而未决点——(1) Action 异步回调机制（建议统一走 Platform Event）+ (2) `workid`↔Agentforce session 生命周期映射与「session 内非确定性推理不纳入 replay」黑盒契约。决定「可被 Agentforce 复用的编排底座候选内核」这一战略卖点的技术可行性。建议交 Agentforce 平台架构团队 + 本项目 owner 联合裁决，deadline 放闸门 B 前。
 
 ---
 
 ## 修订区（Changelog）
+
+### V4 — 2026-08-11（回应 PR #4 新一批 human comment + tech/product reviewer V3 反馈）
+
+**变更时间**：2026-08-11。**本文档（技术设计）相较 V3 的主要改进**：
+
+1. **§1a token 消耗分层标注 + installer + 输入源接口（回应 human comment 7 条）**：明确「token 只在 Worker 层产生」——UI 层/路由器/watcher/signal/护栏均为确定逻辑纯脚本、不消耗 token，编排层引擎唯一 AI 介入（读上下文拉 worker）token 极小可用 Sonnet；新增一期本机 installer（一键装依赖 + 引导配置）；UI 层「输入抽象化」补「提供输入源接口 + 开发接口供二次开发」。
+2. **§2.1 在飞计数 crash-leak 回收（回应 tech reviewer V3 唯一新增工程缺口 P1）**：弃用独立原子计数器，改由守护层从 `GSI2(affinity+progress)` `Count` 派生背压真值（crash-safe，真相从记录派生），保留计数器+reconcile 为备选；显式标注**背压为软上限非硬保证**；护栏共享写**成本量化**（月增量 <$1、每步 +个位数毫秒）；`GUARD#<dep>` 故障风暴写热点用时间桶+实例分片缓解。
+3. **§2.4 sentinel 防 LLM 复述（回应 tech reviewer V3 视角 4 P2）**：静态哨兵升级为 **per-call nonce**（`<<<ORCH_OUTPUT_BEGIN:{nonce}>>>`）+ 取最后一对 nonce 匹配哨兵；`--output-format json` 提为主路径、哨兵兜底。
+4. **§3 AgentforceActionAdapter 契约 + 非确定性 planner 共存（回应 product reviewer SF-architect V3 残留，收敛为 OQ-5）**：把 Agentforce Action 当「至多一次触发 + 异步回调收敛」黑盒、session 内推理不纳入 replay 校验；回调统一走 Platform Event（从"或"变结论）；`workid`↔session 生命周期映射；stateFingerprint 扩展校验 Prompt 版本；平台约束占位数字。
+5. **§3 Data Cloud / Prompt Builder 集成方向草图（回应 product reviewer SF-architect V3 残留 #2）**：审计轨迹作 Data Cloud zero-copy 源；Prompt Builder 托管的 prompt 纳入 stateFingerprint。
+6. **§4 dirty org 冒烟升级 + 多租户复合键×分片键交互（回应 product FDE V3 残留 #1 + tech reviewer V3 视角 6.2）**：干净 org 冒烟升级为 Scratch Org + 预装 AppExchange 包的「dirty org 冒烟」，明确排入二期 FDE 培训前；补打包/交付形态 + L2 支持模型（二期定义）；多租户 `(tenantId, submitter)` 与热分区/在飞分片键的交互连一句边界。
+
+> 以上底层状态机/持久化正确性改动（在飞计数 crash-leak → GSI Count 派生、背压软上限）同步落 `工作流模版.md §4`，并在 `design-notes.md` 记录理由。
 
 ### V3 — 2026-08-10（回应 tech reviewer V2 的 P0/P1 分布式二阶正确性）
 

@@ -284,3 +284,29 @@
 - 无新增 issue-style human comment 待处理（V1 两条上轮已 Resolved in V2）。
 
 **版本**：V3。commit + push 到已存在的 PR #4（复用，绝不重复 create）。未 merge（人类决定）。
+
+---
+
+## V4 修订要点（2026-08-11，回应 PR #4 human comments + tech/product/leadership V3 反馈）
+
+### 关键决策与调研
+- **Opus 定价订正（已核准，非待定）**：据 claude-api skill 缓存的 2026-06 Anthropic 公开定价（Sonnet $3/$15、Opus $5/$25），Opus:Sonnet **纯单价比 = 1.67×**，而非 V3 假设的 5×。据此把 Opus 档月账单从 ≈$450–2,250 下修为 **≈$150–750/月**，去掉"待 claude-api 核准"hedge。product + engineering reviewer V3 P1 均点名此项，确认订正方向。保守上界从"数千/月"收窄为"约 $1–2k/月"。
+- **ECS/Fargate 应急退路成本入表**：engineering reviewer V3 反复指出的 V2 残留——matrix 延期的一期应急退路成本从未进 M1–M4。V4 在里程碑表加**条件性行 +2–4 人周**，明确与二期 Provider 化 8–14 人周是**不同触发条件的两笔钱**（一期临时保云端能力 vs 二期客户现场适配）。
+- **痛点重构（PP + 鱼骨图）**：human comment 指出 `P1` 易被误读为 priority → 全改 `PP1–PP5`（Pain Point）。每条 PP 补可量化效率损耗口径。新增鱼骨图 `v4-painpoint-fishbone`（源+PNG，mermaid.ink pako 渲染）：五 PP → 共同根因「人的在场/介入被迫成为工作流吞吐瓶颈」→ 效应「研发效率低下」。这是把分散痛点收敛到单一根因的关键叙事。
+- **§0 结构重排（痛点→解决方案→原型实例）**：human comment 要求 solution 紧接 pain point、"早期信号"更名"原型实例"并移到 solution 之后、并在 PP 后立刻描述一期落地后的开发流程体现效率。据此：原 §0.3 solution 上提为 §0.2 + 新增 §0.2.1「落地后开发流程」流水；原 §0.2 早期信号降为 §0.3「原型实例」（实证而非推测）。
+- **§2c 指标改名"使用强度/信任代理"**：product reviewer V3 P2 指出三指标测的是内部工程师行为，非买方付费意愿，命名 overclaim。改名后"付费意愿"严格保留给二期真实预算认领测试。闸门 B 第 4 条同步改名。
+- **§2b 定价锚点 + 买方画像**：补 Temporal Cloud/LangGraph Platform/Inngest/n8n 计费轴锚点，我们倾向 consumption 计量（per-workflow-run/per-step）随 Agentforce SKU 打包（避开 n8n $0 开源地板价）。假设买方 = 已部署 Agentforce、有 AI-ops/可靠性预算线的平台工程/研发效能负责人；指出闸门 B 全供给侧、缺需求侧 gate。
+- **Agentforce 技术桥收敛 + OQ-5**：product reviewer V3 P2 指出技术桥零推进、结论跑在验证前。V4 把两个"或"收敛为倾向决策：回调统一走 Platform Event；Action 视为"至多一次触发+异步收敛"黑盒；`workid↔session` 生命周期映射；session 内部非确定性推理**不纳入 replay 校验**（解决 stateFingerprint 与非确定性 planner 的共存正确性问题）；stateFingerprint 扩校验 Prompt Builder 模板版本；补 Data Cloud zero-copy 集成草图 + 三桥接点平台约束占位数字。升级为 **OQ-5**（Agentforce 平台架构团队裁决，闸门 B 前）。
+- **R10 外部 API 限额风险**：engineering reviewer V3 P2 新盲区——15–25 并发下 SF Core/GUS/Slack/GitHub 下游 governor limits 从未测算，一期护栏只防自己的 LLM 调用。新增 R10，用 R8 同框架（每类 API 独立令牌桶+熔断+退避）覆盖。
+
+### 底层设计文档改动（工作流模版.md）
+- **§4 加背压在飞计数的 crash-leak 回收（V4）**：tech reviewer V3 P1 指出 V3 的"独立在飞计数器 +1/-1"在 worker crash（+1 后、-1 前）时**只增不减泄漏 → 假背压永久虚高**。决策：**弃用独立计数器，改由守护层从 `GSI2(affinity+progress)` Count 派生背压真值**（真相从记录派生 → crash-safe，crash 任务 lease 过期后被守护层重新计入/回收，计数自动收敛）；保留计数器+reconcile 为备选（计数器降级为缓存、GSI Count 为事实源）。显式标注**背压=软上限**（最终一致读、有窗口误差），硬上限（token 预算）用单项 CAS 强一致约束。与 tech-design §2.1 一致。
+- 理由：这是底层状态机/持久化正确性缺口（独立旁路状态漂移 vs 从记录派生的真相），必须落到 工作流模版.md 保持主设计与底层一致。
+
+### 反馈处理与标记
+- PR #4 上 V3 后新增的 unresolved review thread（PP 命名/量化/鱼骨图/solution 前移/原型实例更名/Slack 回叫/至少两人/措辞专业化/Agentforce 文档链接等）→ 逐条在 V4 落地，处理后用 GraphQL resolveReviewThread resolve。
+- 三份 V3 reviewer 反馈（tech 8.3 / product 7.6 / leadership 7.8，各只读最新轮次）逐条在 V4 Q&A 回应。
+- leadership 的两个 P0（闸门 A 战略裁决、非 writer 可解）报告侧已就位，留作 kickoff 行动项，不改文档。
+- presentation 抽取版：标为 [OPEN QUESTIONS]，倾向另出独立文件而非塞进报告；本轮先确保 §0.0 决策卡可独立支撑 3 分钟 pitch。
+
+**版本**：V4。commit + push 到已存在的 PR #4（复用，绝不重复 create）。未 merge（人类决定）。
