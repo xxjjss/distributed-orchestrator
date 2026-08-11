@@ -56,6 +56,8 @@ distributed_expert = Agent(
     model=_member_model(),
     instructions=[
         "审查 CAP 权衡、幂等性、去重键，以及状态落盘（SQLite/DynamoDB/Redis 等）机制。",
+        "工作流模版（工作流模版.md）中的 worker 状态机/持久化/幂等/恢复算法属整体技术设计，"
+        "须计入你的分项评分。",
         SCORING,
     ],
 )
@@ -65,6 +67,7 @@ sre_expert = Agent(
     model=_member_model(),
     instructions=[
         "审查断点续传（Crash-Recovery）、熔断、重试与 SPOF（单点故障）风险。",
+        "工作流模版（工作流模版.md）中的状态机与断点恢复设计属整体技术设计，须计入你的分项评分。",
         SCORING,
     ],
 )
@@ -114,6 +117,8 @@ tech_reviewer_team = Team(
     instructions=[
         "你是技术评审团队 leader。把待评审文档分发给全部六位专家并行评审，收集各自的"
         "分项评分（0–10）、理由与建议。",
+        "待评审对象是「主技术设计文档 + 工作流模版.md」构成的整体技术设计；工作流模版.md 的"
+        "状态机/持久化/幂等/恢复算法是主设计的底层部分，须计入主设计文档的整体打分，不得排除。",
         "本轮总评分 = 六项加权平均（默认等权，保留 1 位小数）；若某视角不适用则说明并"
         "将其排除出加权。",
         "按 tech-reviewer.md 的反馈模板输出 Markdown：开头给出总评分与一句话结论，"
@@ -124,24 +129,44 @@ tech_reviewer_team = Team(
 )
 
 
-def review(doc_path: str) -> str:
+def review(doc_path: str, template_path: str | None = None) -> str:
     text = Path(doc_path).read_text(encoding="utf-8")
+    # 工作流模版.md 是主设计的底层部分，一并拼入 prompt，作为整体技术设计评审并计入打分。
+    template_block = ""
+    if template_path and Path(template_path).exists():
+        template_text = Path(template_path).read_text(encoding="utf-8")
+        template_block = dedent(
+            f"""
+
+            以下是主设计的底层组成部分——worker 状态机 / 持久化 / 幂等 / 恢复算法。
+            它属于整体技术设计，请与上面的主设计文档作为一个整体评审，并将其质量计入
+            主设计文档的分项评分（尤其分布式系统架构、SRE 容错两个视角）。
+
+            === 工作流模版开始 ({template_path}) ===
+            {template_text}
+            === 工作流模版结束 ===
+            """
+        )
     prompt = dedent(
         f"""
         请评审以下技术设计文档，按团队职责各视角打分并汇总为 0–10 总评分，
         产出符合 tech-reviewer.md 模板的 Markdown 反馈。
 
-        === 文档开始 ({doc_path}) ===
+        === 主设计文档开始 ({doc_path}) ===
         {text}
-        === 文档结束 ===
+        === 主设计文档结束 ===
         """
-    )
+    ) + template_block
     result = tech_reviewer_team.run(prompt)
     return result.content
 
 
 if __name__ == "__main__":
-    # 报告已拆分为两份交叉引用文档；技术评审默认以技术设计文档为主评审对象。
-    default_doc = str(Path(__file__).parent / ".." / "docs" / "distributed-orchestrator-tech-design.md")
+    # 报告已拆分为两份交叉引用文档；技术评审默认以技术设计文档为主评审对象，
+    # 并把工作流模版.md（底层状态机/持久化/恢复设计）作为整体设计的一部分一并评审、计入打分。
+    docs_dir = Path(__file__).parent / ".." / "docs"
+    default_doc = str(docs_dir / "distributed-orchestrator-tech-design.md")
+    default_template = str(docs_dir / "工作流模版.md")
     doc = sys.argv[1] if len(sys.argv) > 1 else default_doc
-    print(review(doc))
+    template = sys.argv[2] if len(sys.argv) > 2 else default_template
+    print(review(doc, template))
