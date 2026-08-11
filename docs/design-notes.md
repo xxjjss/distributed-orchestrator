@@ -238,3 +238,49 @@
 - 备注：本轮尚无 `leadership-reviewer-feedback-V1.md`（仅 tech + product 两份），故未针对 leadership AI 反馈作回应，待其产出后下一版收敛。
 
 **版本**：V2。commit + push 到已存在的 PR #4（复用，绝不重复 create）。未 merge（人类决定）。
+
+---
+
+## V3 迭代（2026-08-10）— 模式 B 迭代修订
+
+**触发**：PR #4 上 2 条 unresolved human review thread（要求补真实原型实战示例/截图 + WI 端到端示意图）+ 三份 V2 reviewer 反馈（leadership 7.2 conditional-GO、product 7.2、tech 7.6）。V1 comment 与 issue-style comment 上一轮已 Resolved in V2。
+
+### Human comment（2 条 unresolved thread，均在 project-analyst.md）
+- **WI 端到端示意图 + 真实 WI 例子（W-23433231）**：新增 §0.2.1 + `v3-wi-end-to-end.mmd/png` 序列图，画上 WI-worker/tcm-automated-sdd/pr-gate/WI-chatter/watch-pr/job-scheduler/外部信号源；点明"一人并行多 WI、只做 decide/review/sign-off"的效益机制（chatter 临时作状态持久化媒介）。
+- **一期实战截图打动领导层**：嵌入 4 张真实原型截图到 §0.2.1——`v3-sticky-note`（人机界面 in-progress/done/todo=GUS item + NON-WI TASKS 承接 AI 回叫）、`v3-sticky-note-invoke`（双击激活 WI-worker）、`v3-job-scheduler`（带 login session 的调度器，区别于 crontab）、`v3-watch-pr`（watch-pr --list 的 watch-items/state/callback）。截图从 ~/Desktop 复制（文件名含 narrow no-break space  ，用 python glob 处理）。
+
+### Leadership reviewer V2（7.2，conditional-GO）落地
+- §0.0 决策摘要卡（Ask/收益/成本量级/Top-3 风险/建议/门槛，半页）。
+- §0.4 决策建议：Conditional GO + 闸门 A（投钱前：OQ-3 战略裁决 + OQ-1 owner）+ 闸门 B（二期前：4 条试点 gate）。
+- §2c 付费意愿代理指标口径化（三条可从审计轨迹客观算出的指标 + 采集方式）。
+- §5 OQ owner+deadline 表（OQ-1/OQ-3 = 闸门 A 阻塞项；owner/deadline 为 writer 建议，管理层签署以 [OPEN QUESTIONS] 标注——headless 不代签）。
+- §1 术语脚注（affinity/CAS/lease/stateFingerprint/StateStore 业务语言对照）。
+- 战略埋点：一期交付物按"Agentforce 编排底座候选内核"设计（§0.4/§2d/§3a）。
+
+### Product reviewer V2（7.2）落地
+- §3a 一期每月 token 账单合成区间：Sonnet ≈$90–450/月、Opus ≈$450–2,250/月、保守数千/月（护栏封顶），待 claude-api 核准。
+- §2b OQ-3 权重敏感度分析（等权 12v14；分发/壁垒双权重内嵌胜出；仅议价权双权重打平 → 结论基本稳健）。
+- §3b Provider 化 + 客户现场适配增量成本粗估（≈8–14 人周）。
+- OQ-1/OQ-4 owner+deadline（§5 表）。
+
+### Tech reviewer V2（7.6）落地 — 分布式二阶正确性（tech-design §，同步 工作流模版.md）
+- **[P0] 护栏多实例状态共享**（§2.1）：熔断/在飞计数/令牌桶落 DynamoDB 共享项+条件写，按 submitter/dependency 分片；本地配额退路；half-open 挂守护层重扫周期。→ 同步 工作流模版.md §4。
+- **[P0/P1] dedup TTL vs 重放窗口 + watcher 快照依赖链**（§2.2）：dedup_TTL > max_replay_window + 原生 TTL；跃迁标识优先事件稳定标识（merge_commit_sha）+ 快照持久化兜底。→ 同步 工作流模版.md §4。
+- **[P0/P1] 热分区**（§1c）：一期步数/子分支上限规避；二期分支级 PK 分片 workid#branchShard。→ 同步 工作流模版.md §2。
+- **[P1] adapter 契约**（§2.4）：ClaudeCodeAdapter sentinel 包裹 + 解析失败显式失败 + 进度回传；StepFunctionsAdapter 执行态映射；跨大模型归一=二期边界。
+- **[P1] 健康度面板线框**（§2.6）：`v3-health-panel` 两级钻取（多 workspace 汇总条 → 单树分支部分态）。
+- **[P1] 档位1 LangGraph 并发语义风险**（§1d）：CAS lease 叠加 last-write-wins checkpointer 集成成本 + DBOS Postgres 栈冲突注记。
+- **[残留] 改派前校验目标端 handler/鉴权**（§2.3）。
+- **[P2] StateStore 多租户返工面 + Platform Event→signal 租户上下文**（§3）：Provider 扩展非重写；envelope 预留 tenantId。
+
+### 底层设计文档改动（工作流模版.md）
+- §2 加热分区约束（步数上限/二期 PK 分片），与 tech-design §1c 一致。
+- §4 加多实例护栏共享落盘约束 + dedup 时序约束，与 tech-design §2.1/§2.2 一致。
+- 理由：tech reviewer P0 指出的护栏/dedup/热分区是底层状态机/持久化/幂等正确性问题，须落到 工作流模版.md 保持主设计与底层一致。
+
+### 反馈处理与标记
+- PR #4 的 2 条 unresolved review thread → 处理后用 GraphQL resolveReviewThread resolve。
+- 三份 V2 reviewer 反馈（各只读最新轮次）逐条在 V3 Q&A 回应。
+- 无新增 issue-style human comment 待处理（V1 两条上轮已 Resolved in V2）。
+
+**版本**：V3。commit + push 到已存在的 PR #4（复用，绝不重复 create）。未 merge（人类决定）。

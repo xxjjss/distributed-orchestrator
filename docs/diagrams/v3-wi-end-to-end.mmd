@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    actor Human as 工程师 (决定/审查/签收)
+    participant SN as Sticky-Note UI
+    participant JS as job-scheduler (登录态)
+    participant WW as WI-worker (驱动者)
+    participant SDD as tcm-automated-sdd (developer)
+    participant PG as pr-gate (状态机桥梁/签收点)
+    participant WP as watch-pr (信号采集者)
+    participant EXT as 外部信号源 (Git PR / CI-CD / GUS)
+    participant CH as WI-chatter (状态持久化媒介)
+
+    Human->>SN: 双击一个 GUS WI
+    SN->>WW: 激活 WI-worker(W-XXXXX)
+    WW->>CH: 分类/计划 落 chatter
+    WW->>SDD: 分发执行 (Stage N)
+    SDD->>CH: 阶段产出落 chatter
+    SDD->>EXT: 提交 PR (deliverable)
+    SDD->>PG: 交由 pr-gate 驱动评审
+    PG->>WP: 注册 watch (job-scheduler 定时轮询)
+    Note over WP,JS: watch-pr 由 job-scheduler 带登录态定时驱动
+    Human->>EXT: 在 PR 上评审 / 提出修改
+    EXT-->>WP: 状态跃迁 (new-comment / approved / merged)
+    WP-->>PG: signal(envelope) 边缘触发
+    PG->>SDD: 应用反馈 / 推进下一步
+    PG->>CH: 回写签收状态
+    Note over PG: merged + approved 且无 open-marker -> 自动推进下一 Stage
+    PG->>WW: 阶段完成回调, 推进 SDD 下一 Stage
+    WW->>SN: 回叫通知 (该你做动作了: 审查/签收)
+    Note over Human,SN: 一人可并行多个 WI: 只在需要时做 决定/审查/签收

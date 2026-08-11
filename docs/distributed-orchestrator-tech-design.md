@@ -119,6 +119,15 @@
 - **索引检索性能优势**：GSI 让上述关键查询保持 O(结果集)、可水平扩展，避免全表扫描；这是相对关系库在**已知模式 + 高吞吐**场景的净优势。
 - **结论**：主要用例是"高频点写 + CAS 抢锁 + 按树读 + 幂等提交 + 少量已知维度列举"，与 DynamoDB 强项完全吻合；复合查询缺失通过 GSI + 分析侧导出规避，代价可接受。若未来出现大量 ad-hoc 关系查询需求，再评估 Aurora/PG 作为分析副本（不动事务主库）。
 
+**热分区风险与缓解（回应 tech reviewer V2 P0/P1，V1 遗留，本版新增）**：
+超大任务树共享单一 `PK=workid`——`Query(PK)` 拉全树 + 主循环高频点写集中在单一 item collection，可能撞 **DynamoDB 单分区上限（~1000 WCU / 3000 RCU）**；大扇出 workspace 尤其危险。缓解：
+
+1. **一期先设 workspace 步数 / 并发子分支上限**（如单树 ≤ 数百步、活跃子分支 ≤ 数十）——一个开发工作流的自然规模远低于此，上限主要防失控 fan-out（与 §2.1 token 预算护栏同源，一处超限即熔断）。
+2. **二期若需超大树，引入分支级 PK 分片**：`PK = workid#<branchShard>`，把同一树的不同子分支散到多个分区键；"按树读"改为**按已知分支分片并行 Query 后合并**（分片数有限、可枚举）。代价是全树读从一次 Query 变成 N 次并行 Query，但换来写吞吐水平扩展。
+3. **热点监控**：复用 TCM 的 DynamoDB 分区级 CloudWatch 告警，`ConsumedWCU` 逼近分区上限即告警，先靠上限兜底、再按需分片。参考 [DynamoDB write sharding 最佳实践](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-sharding.html)。
+
+一期结论：**先用步数上限规避热分区**（简单、够内部试点用），分片作为二期水平扩展手段标注。
+
 ### 1d. 选型调研（每个关键组件：≤5 候选 + 取舍）
 
 > **调研纪律**：先调研开源社区与商业软件；能否完全满足需求、若不能需自研什么、若能则在**稳定性/扩展性/授权(License)** 上是否允许公司内部使用与商业化。
@@ -139,6 +148,7 @@
 
 "自研"**不是从零重写一个 durable-execution 引擎**，而是分两档，取决于 OQ-1（合规能否引 MIT 依赖）：
 - **档位 1（首选，若可引依赖）**：**在 LangGraph / DBOS 之上增加功能**——直接复用其 checkpointer/恢复算法，我们只写①DynamoDB StateStore 适配、②affinity 分区调度、③Watcher/signal 采集层、④韧性护栏。**这不是重写内核，是"集成 + 补我们独有的分布式/信号/护栏层"**。AI 辅助开发下，估 **6–10 人周**（1–2 名工程师）到可 dogfood 的 MVP。
+  > **档位 1 的隐藏集成风险（回应 tech reviewer V2 P1，须注记）**：LangGraph 官方承认其 checkpointer 是**"最后写赢、无并发锁、副作用不去重"**（[LangGraph persistence](https://langchain-ai.github.io/langgraph/concepts/persistence/)）。我们要在其上叠加 **lease+CAS「恰好一个 runner」**语义——这**不是"复用 checkpointer"那么轻**：LangGraph 的 pending-write 并发模型与我们的 CAS lease 是**两套并发模型，可能语义打架**（谁是状态真相、pending write 如何与 CAS 抢锁协调）。因此**档位 1 的 6–10 人周若含"驯服 LangGraph 并发模型"，估计偏乐观**，须留缓冲或只借鉴其 subgraph 命名空间模型而非直接复用其 saver。此外 **DBOS 走 Postgres 背书，与公司既有栈（DynamoDB）冲突**——档位 1 若选 DBOS 需评估引入 Postgres 的运维代价（[dbos-transact-py](https://github.com/dbos-inc/dbos-transact-py)）。综合看，档位 1 更可能落在"借鉴 LangGraph 命名空间 + 自研 CAS lease 层"，而非无缝复用 saver。
 - **档位 2（若合规禁止引依赖，全部自研内核）**：内核指状态机执行 + 幂等状态转移 + lease/CAS + 恢复重放 + 非确定性检测。**注意：这套算法 `工作流模版.md` 已设计完毕，且我们不追求 Temporal 级的通用性**（不做全量 event-sourcing replay，只做 checkpoint 续跑）。AI 辅助开发下，估内核 **8–14 人周**，加采集/护栏/调度共 **14–22 人周**。**风险诚实标注**：durable-execution 的 correctness 长尾（并发竞态、恢复边界、重放安全）是 Temporal/DBOS 花数年打磨的领域，自研档位的隐藏成本主要在测试与边界加固，故上限留了较大缓冲。
 
 > 详细人月/里程碑/成本见可行性报告 [`project-analyst §3a 成本量化`](./distributed-orchestrator-project-analyst.md#3a-一期重点面向内部-engineer)。
@@ -195,6 +205,19 @@
 - **Bulkhead（隔离）**：按 `submitter` / 按外部依赖分池，单一用户或单一故障依赖不能耗尽全局并发额度，隔离 noisy neighbor。
 - **per-workspace 预算护栏（关键，防失控烧钱）**：新增 `tokenSpent` 字段 + 每 workspace 的 **token 上限 + attemptCount 上限**做硬约束，超限转终态 `error` 并回叫通知，而非无限循环。预算数字见 [project-analyst §3a 成本量化](./distributed-orchestrator-project-analyst.md#3a-一期重点面向内部-engineer)。
 
+**护栏状态在多实例引擎下的共享（回应 tech reviewer V2 P0，本版新增）**：
+§2.5 的引擎是**多实例无主**，而熔断/背压/令牌桶若各实例**本地持有**，则 N 个实例各自学习故障、各自放行，**在飞上限与熔断阈值会被实例数放大 N 倍失效**。本版明确护栏状态的**共享落盘**：
+
+| 护栏状态 | 存放层 | 一致性维护 | 降低竞争 |
+|---|---|---|---|
+| **熔断状态**（per-dependency closed/open/half-open + 连续失败计数） | DynamoDB **共享护栏项**（`PK=GUARD#<dependency>`） | 条件写（CAS）更新计数与状态跃迁，接受额外写成本 | 按 dependency 分项，天然分散 |
+| **在飞 in-progress 计数**（背压） | DynamoDB **共享计数项**（按 `submitter` 分片：`PK=INFLIGHT#<submitter>#<shard>`） | 认领任务时原子 `ADD +1`、完成/失败时 `ADD -1`；读聚合分片求和判阈值 | **按 submitter + shard 分片**降低单项写热点 |
+| **令牌桶配额**（限流） | DynamoDB 共享桶项（per-dependency） | 原子递减 + 定时回填（或用时间戳惰性补桶） | 按 dependency 分项 |
+
+- **代价与取舍**：共享落盘让护栏在分布式下**真正生效**（不被实例数放大失效），代价是每次认领/放行多一次条件写——这与主循环本就高频点写同源，且 §1c 已论证 DynamoDB 条件写是我们的强项原语。**按 submitter/dependency 分片**把这次额外写分散，避免自身成为热点。
+- **half-open 重探测挂到守护层重扫周期（回应 tech V2 残留）**：熔断 `open` 时把相关任务转 `error(retryable=true)` 挂起；守护层**每个重扫周期**检查 `open` 状态的 dependency，到 `cooldown` 后置 `half-open` 并**只放行一个探测任务**——探测成功→`closed` 恢复放行，失败→回 `open` 重新计时。即"下游长期故障的任务靠守护层重扫周期驱动 half-open 重探测"，不依赖额外定时器。
+- **退路**：若共享计数的写成本在压测中过高，退化为**每实例本地配额 = 全局配额 / 实例数**（牺牲精度换零共享写），作为一期简化选项标注。
+
 ### 2.2 signal 幂等 / 去重 + fan-out 重放防护（P0）
 
 envelope 有 `dedup-key`，但 V1 没落地**在哪写、用什么条件写**。一期方案：
@@ -202,6 +225,22 @@ envelope 有 `dedup-key`，但 V1 没落地**在哪写、用什么条件写**。
 - **专用 dedup 存储**（DynamoDB item 或表）：`signal()` 投递时，以 `dedup-key`（= `source#event-type#subject-id#跃迁标识`）做**条件写 `attribute_not_exists`**；写成功才把 `waiting → new` 并入队下一步，写失败（已存在）则视为重复投递，直接丢弃。这把 exactly-once 落到一次 CAS。
 - **crash 窗口（watcher fire 与 callback 之间）**：因 dedup-key 由事件内容确定（非随机），重放同一事件产生同一 key，条件写幂等吸收重放。
 - **fan-out 双重 spawn 防护**：spawn 子分支时，子分支 `branchId` 由 **父步骤 SK + 确定性序号**派生（非随机），`createRoot`/`spawn` 用 `attribute_not_exists` 条件写——同一父步骤重放只建一次子分支。参考 DBOS check-then-execute（[dbos-transact-py](https://github.com/dbos-inc/dbos-transact-py)）。
+
+**dedup 表 TTL vs 事件重放窗口的时序约束（回应 tech reviewer V2 P0/P1，本版新增）**：
+dedup 存储只增不删会无限增长，需 TTL；但**TTL 若早于事件可能重放的最长窗口，会破坏幂等**（key 过期后同一重放事件被当新事件放行）。硬约束：
+
+> **`dedup_TTL` 必须 > 事件的最长可能重放窗口 `max_replay_window`。**
+
+- `max_replay_window` = watcher 崩溃恢复的最长间隔 + 传输层（SQS/回调重试）的最长重投窗口 + 时钟偏移余量。一期取**保守值（如 7 天）**，远大于 watcher 重扫周期（分钟级）与 SQS 消息保留（默认 4 天、可配 14 天）。
+- dedup 项写入时带 `expireAt = now + dedup_TTL`，用 DynamoDB **原生 TTL** 自动清理，零运维。
+- 结论：**只要 `dedup_TTL`（7d）> SQS 保留（≤14d 须相应调大）与 watcher 恢复窗口，幂等在重放下成立**；若二期把 SQS 保留调到 14 天，`dedup_TTL` 须同步 ≥ 14 天 + 余量。
+
+**dedup 正确性串联依赖 watcher 快照持久化（回应 tech reviewer V2，本版新增）**：
+edge-triggered 去重要求"同一跃迁产生同一 dedup-key"。但 dedup-key 含"跃迁标识"，而**跃迁标识依赖 watcher 的上次快照**——若 watcher 崩溃丢失快照，重建后可能对同一 merged 事件生成**不同**跃迁标识 → 绕过 dedup 重复 fire。因此 dedup 的正确性**串联依赖 watcher 快照的持久化**，这条依赖链本版显式画出并处理：
+
+- **watcher 快照必须持久化**（一期落本机 SQLite/文件 + 云端 StateStore 备份），watcher 重启后**从持久化快照恢复**，而非从零重建 → 保证跃迁标识对同一跃迁稳定。
+- **跃迁标识的确定性来源优先用事件自带的稳定标识**（如 PR 的 `merge_commit_sha`、GUS 的 `LastModifiedDate` + 状态值），而非 watcher 内部快照序号——这样即便快照丢失，从外部系统重查也能重建**同一** dedup-key，把对快照的依赖降到最低。
+- 二者叠加：优先靠事件稳定标识（无状态可重建），快照持久化作为兜底 → dedup-key 跨 watcher 重启确定。
 
 ### 2.3 affinity 永久失配的改派（liveness，P0）
 
@@ -213,6 +252,7 @@ V1 的"`affinity=machine:X` 且 X 永久离线 → 只告警不拉起"会**永�
 
 - 任务在 `machine:X` 停滞超过 `reassignThreshold`（可配置，如 24h）→ 从"只告警"升级为**改派候选**：回叫通知 submitter，提供一键"改派到云端 / 改派到另一台在线机 / 保持等待"。
 - **一期默认人工确认改派**（避免自动改派把只该在某机跑的 handler 误迁）；规则化自动改派留后续。
+- **改派前校验目标端具备该 handler + 依赖（回应 tech reviewer V2 残留）**：`machine:X → cloud`（或 `→ machine:Y`）改派前，先查目标端的 **handler 注册表**与**鉴权可达性**——若目标端没有该 handler，或该 handler 依赖的 MCP 连接在目标端不存在（如本机专属登录态），则**改派选项置灰并说明原因**（"目标端缺 handler / 缺鉴权，无法改派"），避免"改派后仍拉不起"的空转。改派候选清单只列**目标端确实能跑**的位置。
 
 ### 2.4 异构 runtime adapter + MCP/A2A 定位（P1）
 
@@ -230,9 +270,22 @@ V1 的"`affinity=machine:X` 且 X 永久离线 → 只告警不拉起"会**永�
 | **A2AAdapter** | 通过 [A2A（Agent2Agent）](https://github.com/google/A2A) 协议调远程 agent | **后续**：预留契约，一期不实现 |
 | **MCPToolAdapter** | 直接调 [MCP](https://modelcontextprotocol.io) tool | 一期做（worker 内部本就走 MCP） |
 
+**adapter 契约级细节（从"能列出"升级到"能定契约"，回应 tech reviewer V2 P1）**：
+
+一期主力两条路径给出**明确契约**，而非停在清单：
+
+- **ClaudeCodeAdapter 的结构化 output 解析契约**：`claude -p` 子进程 stdout 会混入日志/思考/非结构化文本，可靠解析是现实难题。契约：
+  1. **约定 sentinel 包裹**：prompt 中强约束 worker 把最终结构化结果输出在**固定哨兵之间**——`<<<ORCH_OUTPUT_BEGIN>>>{json}<<<ORCH_OUTPUT_END>>>`；adapter 只取哨兵间内容做 JSON 解析，忽略其余 stdout（日志）。
+  2. **优先用结构化输出模式**：能用 `--output-format json`（或工具的结构化输出能力）时直接取，sentinel 为兜底。
+  3. **解析失败 = 显式失败**：哨兵缺失/JSON 非法 → 该步转 `error(retryable=true)`（bump attemptCount 重试一次），连续失败转终态告警，**绝不把半解析结果当成功**。
+  4. **进度回传**：子进程按 §2.6 约定周期性打印 `<<<ORCH_PROGRESS>>>{step,tokenSpent}` 行，adapter 转成 `checkpoint()` 续 lease + 更新 `tokenSpent`。
+- **StepFunctionsAdapter 的执行态映射契约**：`StartExecution` 后，SFN 执行态 → 编排器 progress 映射——`RUNNING → in-progress`（轮询/EventBridge 续 lease）、`SUCCEEDED → finished`（取 output 跑 route）、`FAILED/TIMED_OUT/ABORTED → error`（`retryable` 由 SFN 错误类型判定：`States.Timeout`→retryable，业务错误→terminal）。沿用 TCM 50-op 阈值模式选粗/细粒度。
+
 **与业界标准的定位（必答题）**：
 - **MCP（Model Context Protocol）**：已是**工具互操作事实标准**。本编排器是 **MCP 的消费方**——worker 通过 MCP adaptor 调外部工具/系统；我们不重造工具协议，鉴权也复用它（组件 C）。MCP 未覆盖的鉴权类型（某些 service account / 自定义 token）在 adapter 层留"直连凭据"退路，不强绑 MCP。
 - **A2A（Agent2Agent）**：agent 间互操作的新兴标准。本编排器定位为 **A2A 的编排上层**——把遵循 A2A 的远程 agent 当作一种 worker runtime（A2AAdapter）纳入编排，而非与 A2A 竞争。一期预留契约、不实现，避免过早绑定未定标准。
+
+**跨大模型归一 = 二期已知边界（回应 tech reviewer V2 P1）**：一期只覆盖 Claude Code / opencode（同族 `claude -p` 语义），**不做**"同一 handler 在 Claude/GPT/Gemini 间的调用转换与 prompt/tool-schema 归一"。这是明确的**已知边界**——二期若要接异构大模型 worker，须在 adapter 层加一层"模型能力归一"（prompt 模板差异、tool-calling schema 差异、结构化输出能力差异）。一期标注为边界，不实现。
 
 ### 2.5 workflow 引擎自身 HA
 
@@ -257,6 +310,15 @@ V1 的"`affinity=machine:X` 且 X 永久离线 → 只告警不拉起"会**永�
 - 一期显式交付**「多任务健康度 / 待办 / 需 Reconnect」面板**（sticky-note 扩展）：一屏看清所有 workspace 的 progress 分布，红点标出需人介入的两类最高频情形——**笔记本关机导致 machine worker 停摆** 与 **MCP OAuth 过期**——并把"stall/过期 → 通知 → 一键 Reconnect/改派"做成闭环。
 - sticky-note 目前仅 macOS 桌面（一期内部可接受；商业化需跨端，见 project-analyst）。
 
+**健康度面板线框 + fan-out 树形部分态（回应 tech reviewer V2 P1，本版新增）**：
+
+![健康度面板两级钻取线框](diagrams/v3-health-panel.png)
+
+> 源文件：`diagrams/v3-health-panel.mmd`。设计要点：
+> - **一级视图（多 workspace 不淹没用户）**：顶部**健康度汇总条**（🟢 运行/等待 · 🟡 需 Reconnect/改派 · 🔴 失败需人工）先给总量；下方每行一个 workspace，用**颜色 + 一句话状态 + 就地动作按钮**（[一键 Reconnect]/[改派]/[查看原因]）。信息密度策略：**默认只展开非绿（🟡🔴）需人介入的**，绿色折叠计数——20 个并发也只需看少数需动作的。
+> - **二级视图（钻取单 workspace 的任务树部分态）**：点开一个 workspace → 展示其**任务树的分支部分态**（根分支 + fan-out 子分支各自的 progress），解决"一棵树里 2 分支 waiting、1 分支 error"如何呈现——这正是分布式 UX 最难的层级。之前面板只停在 workspace 级聚合，本版补齐**树内分支级**钻取。
+> - 一期实现为 sticky-note 的两级视图；线框为设计基线，视觉细节留实现。
+
 ---
 
 ## 3. 与 Salesforce 既有编排原语的关系（回应 tech P1 / product P1）
@@ -271,7 +333,9 @@ V1 的"`affinity=machine:X` 且 X 永久离线 → 只告警不拉起"会**永�
 
 **Einstein Trust Layer（商业化硬门槛）**：一旦 LLM worker 操作**客户数据**，必过 [Einstein Trust Layer](https://www.salesforce.com/products/platform/trusted-ai/)（脱敏/审计/零留存/毒性检测）。一期只处理**公司内部研发数据（GUS/PR）**，不触客户数据，故一期不接；但**商业化/FDE 带客户场景前必须接入**——列为商业化前置门槛（见 project-analyst 风险登记）。
 
-**Hyperforce 多租户 / 数据驻留**：共享云表当前仅由 `submitter` 做粗隔离，够一期内部用；走向 Platform/多租户商用时须满足 Hyperforce 的**租户隔离 + 数据驻留**合规——这是比 submitter 隔离更大的架构改造（可能需 per-tenant 表/账户 + 驻留区域路由），在 §4 与 project-analyst 远期架构显式点名。
+**Hyperforce 多租户 / 数据驻留**：共享云表当前仅由 `submitter` 做粗隔离，够一期内部用；走向 Platform/多租户商用时须满足 Hyperforce 的**租户隔离 + 数据驻留**合规——这是比 submitter 隔离更大的架构改造（可能需 per-tenant 表/账户 + 驻留区域路由），在 §4 与 project-analyst 远期架构显式点名。**对 StateStore 抽象的返工面（回应 tech reviewer V2）**：per-submitter → per-tenant 意味着 StateStore 接口需加 `tenantId` 维度（PK 前缀或独立表/账户 + 驻留路由），是 StateStore Provider 的一次扩展而非重写——因一期已把持久化收敛为接口（§4），返工集中在 Provider 实现层，抽象层可复用。
+
+**Platform Event → signal 的租户上下文映射（回应 tech reviewer V2 P2）**：远期若订阅 Platform Event 作为 Watcher 源，事件的 `tenantId`/`OrgId` 须映射到编排器的隔离键——一期 `submitter`（个人身份）在多租户下升级为 `(tenantId, submitter)` 复合键，envelope 增 `tenantId` 字段透传，signal 落库时按复合键分区。一期不实现，预留 envelope 字段兼容。
 
 ---
 
@@ -312,6 +376,18 @@ FDE 把编排器带到客户现场时，需要替换的远不止一个 StateStor
 
 ## 修订区（Changelog）
 
+### V3 — 2026-08-10（回应 tech reviewer V2 的 P0/P1 分布式二阶正确性）
+
+**本文档（技术设计）相较 V2 的主要改进**（逐条对应 tech-reviewer-feedback-V2）：
+1. **§2.1 护栏与多实例引擎的状态共享（P0，V2 新引入的最高优先正确性问题）**：明确熔断状态/在飞计数/令牌桶落 **DynamoDB 共享项 + 条件写**（按 submitter/dependency 分片降热点），退路为"每实例本地配额=全局/实例数"；half-open 重探测挂守护层重扫周期。同步落 `工作流模版.md §4`。
+2. **§2.2 dedup TTL vs 重放窗口 + watcher 快照依赖链（P0/P1）**：给出 `dedup_TTL > max_replay_window` 硬约束 + DynamoDB 原生 TTL 清理；跃迁标识优先取事件自带稳定标识（PR merge_commit_sha 等），watcher 快照持久化作兜底。同步落 `工作流模版.md §4`。
+3. **§1c 热分区（P0/P1，V1 遗留）**：一期用 workspace 步数/子分支上限规避，二期分支级 PK 分片（`workid#<branchShard>`）水平扩展 + 热点监控。同步落 `工作流模版.md §2`。
+4. **§2.4 adapter 从清单升级为契约（P1）**：ClaudeCodeAdapter 的 sentinel 包裹 + 结构化输出 + 解析失败显式失败 + 进度回传契约；StepFunctionsAdapter 的 SFN 执行态→progress 映射；跨大模型归一标注为二期已知边界。
+5. **§2.6 健康度面板线框 + fan-out 树形部分态（P1）**：新增 `v3-health-panel` 两级钻取线框（一级多 workspace 汇总条 + 非绿优先展开；二级钻取单树分支部分态）。
+6. **§1d 档位 1 的 LangGraph 并发语义风险注记（P1）**：last-write-wins checkpointer 上叠加 CAS lease 的集成成本可能使 6–10 人周偏乐观 + DBOS 的 Postgres 栈冲突。
+7. **§2.3 改派前校验目标端 handler/鉴权（残留）**：改派候选只列目标端确实能跑的位置，避免改派后拉不起。
+8. **§3 StateStore 多租户返工面 + Platform Event→signal 租户上下文映射（P2）**：per-submitter→per-tenant 是 Provider 扩展非重写；envelope 预留 tenantId。
+
 ### V2 — 2026-08-10 15:35 PDT
 
 **结构性变更**：应 human comment，将原单一 `distributed-orchestrator.md` **拆分为两份交叉引用的文档**——本**技术设计文档**（面向技术审核人）与[**可行性报告**](./distributed-orchestrator-project-analyst.md)（面向产品/领导层）。原文件改为索引页。相应更新了 `tech-reviewer` / `product-reviewer` / `leadership-reviewer` 定义与 `design-work-flow`，保持评审对象一致。
@@ -346,3 +422,21 @@ FDE 把编排器带到客户现场时，需要替换的远不止一个 StateStor
 **Tech reviewer V1（6.7/10）P0/P1**：熔断/背压（§2.1）、signal 去重/fan-out 防护（§2.2）、affinity liveness 改派（§2.3）、异构 runtime adapter + MCP/A2A（§2.4）、Flow Orchestrator/Trust Layer/Hyperforce（§3）、局部失败 UX（§2.6）、候选集补全（§1d）——**全部采纳并落地设计**。
 
 > 说明：本轮尚无 `leadership-reviewer-feedback-V1.md`（仅 tech + product 两份 V1 反馈），故本版未针对 leadership AI 反馈作回应；待其反馈产出后于下一版收敛。
+
+### V3 Q&A / 反馈回应（技术侧，逐条对应 tech-reviewer-feedback-V2）
+
+| # | tech reviewer V2 未解决/建议 | 优先级 | 处理 |
+|---|---|---|---|
+| 1 | 多实例引擎下熔断/背压/令牌桶状态共享（护栏在分布式下不被实例数放大失效） | **P0** | **采纳**：§2.1 共享落盘（DynamoDB 共享项+条件写，按 submitter/dependency 分片）+ 本地配额退路 + half-open 挂重扫周期。 |
+| 2 | dedup 表 TTL vs 事件重放窗口时序约束；watcher 快照持久化与 dedup-key 确定性依赖链 | **P0/P1** | **采纳**：§2.2 `dedup_TTL > max_replay_window` + 原生 TTL；跃迁标识优先事件稳定标识 + 快照持久化兜底。 |
+| 3 | 单 `PK=workid` 全树吞吐热分区（V1 遗留） | **P0/P1** | **采纳**：§1c 一期步数/子分支上限规避 + 二期分支级 PK 分片 + 热点监控。 |
+| 4 | 改派 `machine:X → cloud` 时目标端是否具备 handler | 残留 | **采纳**：§2.3 改派前校验目标端 handler+鉴权，候选只列能跑的位置。 |
+| 5 | adapter 契约级：`claude -p` 结构化 output 解析、SFN 执行态→waiting/finish 映射 | **P1** | **采纳**：§2.4 sentinel 包裹 + 解析失败显式失败契约；SFN 执行态映射表。 |
+| 6 | 跨大模型（Claude/GPT/Gemini）调用转换与归一——一期至少标注边界 | **P1** | **采纳**：§2.4 标注为二期已知边界，一期不实现。 |
+| 7 | 熔断 open 任务的 half-open 重探测如何挂守护层重扫周期 | 残留 | **采纳**：§2.1 明确挂重扫周期、每周期只放行一个探测任务。 |
+| 8 | UX：健康度面板线框 + fan-out 多分支树部分态可视化 | **P1** | **采纳**：§2.6 新增 `v3-health-panel` 两级钻取线框。 |
+| 9 | 档位 1 在 last-write-wins checkpointer 上叠加 CAS lease 的并发语义风险注记 | **P1** | **采纳**：§1d 注记（6–10 人周偏乐观 + DBOS Postgres 栈冲突）。 |
+| 10 | StateStore 多租户返工面；Platform Event→signal 租户上下文映射 | **P2** | **采纳**：§3 补 Provider 扩展非重写 + envelope 预留 tenantId。 |
+| 11 | OQ-1 合规引依赖、OQ-2 matrix 身份 (a)/(b) | 非 writer 可解 | **跟踪**：见 project-analyst §5 owner+deadline 表，OQ-1 列闸门 A 阻塞项。 |
+
+> 变更时间：2026-08-10。以上改动同步落 `工作流模版.md`（§2 热分区、§4 护栏共享 + dedup 时序），并在 `design-notes.md` 记录理由。
