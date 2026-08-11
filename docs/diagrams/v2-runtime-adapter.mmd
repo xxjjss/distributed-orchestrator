@@ -1,0 +1,23 @@
+graph LR
+  MGR["workflow 引擎<br/>只认 handler 契约: enter(input,state,substate) / route(output)"]
+
+  subgraph ADP["Worker Runtime Adapter 层 (统一 invocation)"]
+    A1["ClaudeCodeAdapter<br/>claude -p / opencode 子进程"]
+    A2["ScriptAdapter<br/>本地/远程 shell 脚本"]
+    A3["StepFunctionsAdapter<br/>StartExecution + 轮询/回调"]
+    A4["A2AAdapter<br/>Agent2Agent 远程 agent"]
+    A5["MCPToolAdapter<br/>直接调 MCP tool"]
+  end
+
+  MGR -->|标准 enter/route| ADP
+  A1 --> W1["Claude Code agent"]
+  A2 --> W2["纯脚本 worker"]
+  A3 --> W3["Step Functions 工作流"]
+  A4 --> W4["外部 A2A agent"]
+  A5 --> W5["MCP 工具"]
+
+  W1 -.output/route.-> MGR
+  W2 -.output/route.-> MGR
+  W3 -.output/route.-> MGR
+  W4 -.output/route.-> MGR
+  W5 -.output/route.-> MGR

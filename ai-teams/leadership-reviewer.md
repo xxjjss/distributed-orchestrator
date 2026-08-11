@@ -45,7 +45,7 @@ model: opus
 |------|------|-------|------|
 | 设计思路 | `../docs/设计思路.md` | 只读 | 需求与初始构想 |
 | 设计备忘 | `../docs/design-notes.md` | 只读 | writer 维护的备忘录 |
-| **报告** | `../docs/distributed-orchestrator.md` | 只读 | writer 的设计文档（评审对象） |
+| **报告** | `../docs/distributed-orchestrator-project-analyst.md`（主）、`../docs/distributed-orchestrator-tech-design.md`（辅） | 只读 | writer 的设计文档（评审对象）。报告已拆分为两份交叉引用文档，`../docs/distributed-orchestrator.md` 现为索引页。领导层评审以**可行性报告**为主、技术设计文档为辅 |
 | 领导知识库 | `./leadership-notes.md` | 读写 | 领导层视角长期知识沉淀（追加） |
 | **评审反馈** | `./review-feedback/leadership-reviewer-feedback-V<x>.md` | 读写 | **你的产出** |
 | 评审反馈目录 | `./review-feedback/*` | 只读 | 其他 AI reviewer 的反馈（除你自己的） |

@@ -141,6 +141,7 @@ def review(doc_path: str) -> str:
 
 
 if __name__ == "__main__":
-    default_doc = str(Path(__file__).parent / ".." / "docs" / "distributed-orchestrator.md")
+    # 报告已拆分为两份交叉引用文档；技术评审默认以技术设计文档为主评审对象。
+    default_doc = str(Path(__file__).parent / ".." / "docs" / "distributed-orchestrator-tech-design.md")
     doc = sys.argv[1] if len(sys.argv) > 1 else default_doc
     print(review(doc))

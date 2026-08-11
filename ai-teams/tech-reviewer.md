@@ -30,7 +30,7 @@ model: opus
 | 设计思路 | `../docs/设计思路.md` | 只读 | 需求与初始构想 |
 | 设计备忘 | `../docs/design-notes.md` | 只读 | writer 维护的备忘录 |
 | 工作流模版 | `../docs/工作流模版.md` | 只读 | worker 状态机 / 持久化模版（既有设计，参考） |
-| **报告** | `../docs/distributed-orchestrator.md` | 只读 | writer 的设计文档（评审对象） |
+| **报告** | `../docs/distributed-orchestrator-tech-design.md`（主）、`../docs/distributed-orchestrator-project-analyst.md`（辅） | 只读 | writer 的设计文档（评审对象）。报告已拆分为两份交叉引用文档，`../docs/distributed-orchestrator.md` 现为索引页。技术评审以**技术设计文档**为主、可行性报告为辅 |
 | **评审反馈** | `./review-feedback/tech-reviewer-feedback-V<x>.md` | 读写 | **你的产出** |
 | 评审反馈目录 | `./review-feedback/*` | 只读 | 其他 AI reviewer 的反馈（除你自己的） |
 | Agno 团队实现 | `./tech_reviewer_team.py` | 只读 | 六专家评审团队的代码（见下） |

@@ -35,7 +35,7 @@ model: opus
 | 设计备忘 | `../docs/design-notes.md` | 只读 | writer 维护的备忘录 |
 | 工作流模版 | `../docs/工作流模版.md` | 只读 | worker 状态机 / 持久化模版（既有设计，参考） |
 | FDE 指南 | `../../FDE-the-Guidance-Book-of-Forward-Deployed-Engineer` | 只读 | FDE 交付方法论参考 |
-| **报告** | `../docs/distributed-orchestrator.md` | 只读 | writer 的设计文档（评审对象） |
+| **报告** | `../docs/distributed-orchestrator-project-analyst.md`（主）、`../docs/distributed-orchestrator-tech-design.md`（辅） | 只读 | writer 的设计文档（评审对象）。报告已拆分为两份交叉引用文档，`../docs/distributed-orchestrator.md` 现为索引页。产品评审以**可行性报告**为主、技术设计文档为辅 |
 | **评审反馈** | `./review-feedback/product-reviewer-feedback-V<x>.md` | 读写 | **你的产出** |
 | 评审反馈目录 | `./review-feedback/*` | 只读 | 其他 AI reviewer 的反馈（除你自己的） |
 | Agno 团队实现 | `./product_reviewer_team.py` | 只读 | 四专家评审团队的代码（见下） |

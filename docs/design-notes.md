@@ -171,3 +171,70 @@
 - OQ-3：商业化路径 独立 SaaS vs 内嵌 Agentforce/Platform（倾向后者）。
 
 **版本**：V1。commit + PR（ghx，指向 main）。未 merge（人类决定）。
+
+---
+
+## V2 迭代（2026-08-10）— 模式 B 迭代修订
+
+**触发**：PR #4 上收到大量 human review comment + 两条 issue-style reviewer 评审 + tech/product reviewer V1 反馈文件。本轮为模式 B 迭代修订，收尾一轮被墙钟超时中断的写作。
+
+### 结构性决策（最大变更）
+- **拆文档**（human comment 最高优先）：原单一 `distributed-orchestrator.md` 拆为两份交叉引用文档：
+  - `distributed-orchestrator-tech-design.md`：面向技术审核人，系统结构/选型/实现/机制正确性。
+  - `distributed-orchestrator-project-analyst.md`：面向产品与领导层，现状/痛点/分期/益处/成本/前景。
+  - 原 `distributed-orchestrator.md` 降级为索引/导航页。
+- **一致性联动**（human comment 明确要求）：拆分后同步更新三个 reviewer 定义（`tech-reviewer.md`/`product-reviewer.md`/`leadership-reviewer.md`）的「报告」路径行、三个 `*_team.py` 的 `default_doc`（tech→tech-design，product/leadership→project-analyst）、以及 `design-work-flow.md`，使评审对象与拆分后的文档结构保持一致。
+
+### 术语与命名（human comment）
+- 新增术语：**CAS**（Compare-And-Swap）、**workspace**（workid/branchId 的对外泛化）、**envelope**。
+- `agent-work-manager` 正式定位为 **workflow 引擎**（可编排多 worker、可嵌套 workflow）。
+- 回叫措辞由「该你做决定了」改为「该你做动作了（决定/审查/签收，承担责任）」。
+- Watcher 例子去掉「3–4 个」具体数字，改为「Slack/PR/CI-CD/GUS 状态等」。
+- 「富交互留后续」明确为「图形化拖拽编辑、多面板联动、可视化审计钻取」。
+- SFN 措辞去掉「大量」→「公司已在 TCM 使用」。
+
+### 分期主线（human comment）
+- 确立「**一期推工具、二期推环境、长期推产品**」主线，贯穿执行摘要与蓝图。
+- 设计思路的痛点归纳润色为 P1–P5 表格，作为 presentation 的 why（人类评审只读成品文档）。
+
+### 图表（v2 重画）
+- `v2-architecture`：Watcher 加监听 GUS 连线；workflow 引擎标注可组合；新增韧性护栏节点；云端 worker 标注「云端跑时用户可关机」。
+- `v2-message-seq`：加 note「worker=affinity:cloud 时用户即可关机断网」；signal 标注 dedup 条件写。
+- `v2-affinity-scheduling`：新增 `machine:X` 永久离线 → stall 超阈值 → 改派分支（liveness）。
+- `v2-runtime-adapter`：新增，异构 runtime adapter（ClaudeCode/Script/StepFunctions/A2A/MCPTool）。
+
+### 机制正确性（tech reviewer P0/P1，落到 tech-design §2）
+- §2.1 熔断/限流/背压/bulkhead + per-workspace token 预算护栏（新增 `tokenSpent` 字段）。
+- §2.2 signal 幂等/去重：dedup-key 条件写 `attribute_not_exists`；fan-out 子分支确定性派生防双重 spawn。
+- §2.3 affinity 永久失配的改派（liveness 兜底，一期默认人工确认）。
+- §2.4 Worker Runtime Adapter + MCP（消费方）/A2A（编排上层）定位。
+- §2.5 引擎多实例无主 HA（CAS 抢 lease 去重，非 SPOF）。
+- §2.6 局部失败 progress→UI 映射 + MCP 过期一键 Reconnect + machine 离线一键改派闭环。
+
+### DynamoDB 选型理由（human comment，tech-design §1c）
+- 结合主要用例（高频点写+CAS 抢锁+按树读+幂等提交）论证 NoSQL 强项；诚实标注复合查询缺失，用 GSI（submitter / affinity+progress）+ 分析侧导出规避。
+
+### 自研含义与工作量（human comment，tech-design §1d）
+- 「自研」分两档：档位1（可引 MIT 依赖，在 LangGraph/DBOS 上增功能，6–10 人周）/档位2（合规禁止，全自研内核，14–22 人周），AI 辅助估计；差别由 OQ-1 决定。
+
+### 成本量化（product reviewer P0，project-analyst §3a）
+- 人力/里程碑 M1–M4（档位1 ≈11–17 / 档位2 ≈16–24 人周，约 1 季度，1–2 工程师）；云资源月成本（几十至低几百美元）；LLM Token 预算（并发×步数×单步×单价 + memoization 省 token + 每-workspace token/attemptCount 硬上限熔断）。
+
+### 商业化与 FDE（product reviewer P1 + human comment）
+- 一期只谈内部收益，商业化作愿景/可能性探讨；OQ-3 升级为四维打分（TAM/壁垒/分发/议价权，倾向内嵌 Agentforce）。
+- §2d Agentforce 技术桥：编排器作 Agentforce Action 长跑后端 / Flow async 编排层 / Platform Events 桥。
+- FDE 现场落地问题（与客户 Org 共存、通用 AI 组件、合规）列为未来问题，一期只点名不给方案。
+- tech-design §4 可外带 IP 内核边界：鉴权/托管/持久化/输入源做可插拔 Provider。
+
+### 与 SF 既有编排原语（tech P1 + product P1，tech-design §3）
+- 正面回答「为何不用 Flow Orchestrator/Platform Events」（互补+桥接，非替代）；Einstein Trust Layer 商业化前置门槛；Hyperforce 多租户前瞻。
+
+### 风险与 OQ 新增
+- R8（token 失控烧钱）、R9（客户现场可移植性悬崖）；OQ-4（Matrix 内部工具 vs 对外产品 + EC2/客户服务器后备计划）。
+
+### 反馈处理与标记
+- PR #4 的 24 条 review thread 逐条对照 V2 文档，处理后用 GraphQL `resolveReviewThread` resolve。
+- 2 条 issue-style reviewer 评审回复「Resolved in V2」并加 👍。
+- 备注：本轮尚无 `leadership-reviewer-feedback-V1.md`（仅 tech + product 两份），故未针对 leadership AI 反馈作回应，待其产出后下一版收敛。
+
+**版本**：V2。commit + push 到已存在的 PR #4（复用，绝不重复 create）。未 merge（人类决定）。
