@@ -37,3 +37,20 @@
 ## 5) 变更记录（追加）
 
 - 2026-08-10：初始化 leadership reviewer 知识库模板。
+
+### 2026-08-10 — V2 评审前的战略语境采集（首轮领导层评审）
+
+**Agentforce = 当前 Salesforce 头号战略（公开信号，salesforce.com/agentforce）**：
+- 定位「limitless digital labor force」——把 AI 从 chatbot 升级为 24/7 自主推理的「数字劳动力」。
+- 明确提供 **multi-agent orchestration**（「build a collaborative AI agent team」）与 **MCP 互操作**（连接外部工具/资源）。
+- 技术底座 Atlas Reasoning Engine（拆解任务、生成执行计划）；信任面 = Data 360 grounding + Einstein Trust Layer。
+- 商业模式 = **消费型计费**（Flex Credits / Conversations / per-user），从 Salesforce Foundations 免费起步降低采用门槛，主打「可度量 ROI」。
+- 市场证明点：18K+ 企业已上 Agentforce；Gartner 2026 会话式 AI MQ Leader；G2 #1。
+
+**对本项目的战略含义（评审用）**：
+1. **强正向对齐**：本项目「让任意 agent 7×24 可靠长跑 + 断点续跑 + 人机闭环」正是「数字劳动力」叙事缺的**运行时/编排运维层**。与公司头号战略同向，这是最大加分项。
+2. **build-vs-leverage 风险（最尖锐的领导层问题）**：Agentforce 自身**已宣称 multi-agent orchestration + MCP**。本项目主张「互补而非竞争」（做 Platform 外 durable 运行时），但领导层会问：**这是否与 Agentforce/Platform 团队正在自建的编排能力重叠/重复投资？** 报告 §2d 给了技术桥，但「不重复投入」需战略层背书（呼应 OQ-3）。
+3. **消费型计费 = token 成本敏感**：公司战略已把 LLM 成本/ROI 摆上台面，本项目 §3a 的 token 预算护栏与「每-WI 成本上限」正对领导层胃口——继续强化「可度量单位经济学」。
+4. **Trust Layer / Hyperforce 是商用硬门槛**：任何触客户数据的商用化都要过 Einstein Trust Layer + Hyperforce 多租户——报告已列为远期前置门槛，方向正确。
+
+**Slack channel 内部讨论**：本轮 Slack MCP 未授权，内部方向信号未采集；下一轮若授权应核对 Agentforce 编排 roadmap 与本项目是否 owner 重叠（build-vs-leverage 的关键实据）。
