@@ -85,3 +85,21 @@
 - **天花板不变**：闸门 A 战略层裁决（编排层归属 / 与 Agentforce 是否重复投资）仍只有作者技术论证（§2b 敏感度 + §2d 技术桥收敛 + 新增 OQ-5），无管理层署名——这是 conditional→full GO 唯一硬门槛，非 writer 可解，评分过 8.0 的前提。
 - **给二期的新要点**：闸门 B 4 条 gate 全供给侧，须补一条需求侧 gate（真实部门预算认领意向测试）——V4 §2b 已诚实点名此缺口。
 - **打分演进**：V2 7.2 → V3 7.8 → V4 8.0。上限由"文档外管理层动作"封住，写作侧收益递减已明显。
+
+### 2026-08-12 — V5 战略语境采集（Slack 授权本轮可用，V2–V4 缺口补齐）
+
+**首次拿到 Agentforce 编排 roadmap 内部实据（Slack search，直接作用于 build-vs-leverage / 闸门 A）：**
+- **Agentforce Multi-Agent Orchestration 已 GA（Summer '26）**：super-agent 架构 + Atlas Reasoning Engine，primary agent 意图路由到 best-fit sub-agent，"context travels with the conversation"。**关键边界：SOMA = Single-Org Multi-Agent，是会话内/单 org 的 agent-to-agent 路由，不是跨天 durable 长跑执行层。** → 对本项目"托管≠编排、Agentforce 造 agent、本项目让 agent 7×24 可靠长跑"的互补论证是**外部产品边界背书**（互补从断言变为有据）。
+- **"multi-org multi-agent orchestration efforts currently paused; third-party agent integration remains the primary strategic priority"**（FDE 技术 deep-dive，PM 口径 Pragya Anand）：本项目"编排任意 AI agent/skill/脚本"与"第三方 agent 集成为头号优先"**同向**（正向对齐信号）。
+- **风险面**：内部 "orchestration" 品牌下在跑的团队极多（SOMA/Super Agents、Agentic Selling Orchestration Council、多个 DEX squad 的 MCP/Slackbot/Agentforce orchestration discovery，2026-08 多个新 channel 刚 kickoff）。landscape 拥挤 → **抬升闸门 A 署名裁决的紧迫性**：越晚裁越易被视为重复投资。
+- **净判断**：Slack 语境**降低**了 build-vs-leverage 的"技术差异化"风险（SOMA≠durable 运行时），但**抬升**了其"组织资源/归属"紧迫性 → 闸门 A 须尽快做，且现在有更清晰的差异化话术支撑那次裁决。
+
+## V5 评审沉淀（2026-08-12，distributed-orchestrator PR #4 commit ba09142）
+
+**本轮总评分 8.1/10（战略 8.1 + 文档 8.1，等权），Conditional GO 维持。**
+
+- **微升 +0.1 的理由（非排版打磨）**：§0.3(0) 把立项核心论据"≈3×"从口头自述**锚定到公司可核验的 ENG360 Developer Productivity 仪表盘**（作者 EO=105.07 全表第 1，第 2 名 87.96，倍数 2–3.7×，诚实标注仍 n=1）——在一个此前未使用的维度上加了客观证据，实质降低"ROI 是否真实"疑虑。叠加两条 writer 可解 P1 全部闭环（M1 埋点即验收、需求侧 gate 建议写入闸门 B），给 +0.1。
+- **writer 可解项已全部闭环**：M1「埋点即验收」写死为验收项（§2c + §3a M1 行）；需求侧 gate 建议写入闸门 B（§0.4）；FDE 可审计 gate（§2c，采纳 product V4）；R10 数量级初判（§4）；3 条剩余 human comment 全部 resolve（ENG360 落主报告，DynamoDB 鉴权 + Matrix 调研落技术设计）。
+- **天花板不变（~8.5）**：闸门 A 战略署名裁决（编排层归属 / 与 Agentforce/SOMA 是否重复投资）+ ROI 多人复现（闸门 B ≥1.5×），两件文档外动作。本轮 Slack 语境为"技术差异化"半边补了外部证据，但"资源/归属"半边仍须管理层动作。
+- **文档侧唯一残留（非扣分硬项）**：presentation 抽取版仍 deferred；随 Changelog 四版叠加，建议从"无限期 defer"提为"kickoff 后尽快"。
+- **打分演进**：V2 7.2 → V3 7.8 → V4 8.0 → V5 8.1。上限仍由文档外管理层动作封住。
