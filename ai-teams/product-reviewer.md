@@ -35,7 +35,7 @@ model: opus
 | 设计备忘 | `../docs/design-notes.md` | 只读 | writer 维护的备忘录 |
 | 工作流模版 | `../docs/工作流模版.md` | 只读 | worker 状态机 / 持久化模版（既有设计，参考） |
 | FDE 指南 | `../../FDE-the-Guidance-Book-of-Forward-Deployed-Engineer` | 只读 | FDE 交付方法论参考 |
-| **报告** | `../docs/distributed-orchestrator.md` | 只读 | writer 的设计文档（评审对象） |
+| **报告** | `../docs/distributed-orchestrator-project-analyst.md`（主）、`../docs/distributed-orchestrator-tech-design.md`（辅） | 只读 | writer 的设计文档（评审对象）。报告已拆分为两份交叉引用文档，`../docs/distributed-orchestrator.md` 现为索引页。产品评审以**可行性报告**为主、技术设计文档为辅 |
 | **评审反馈** | `./review-feedback/product-reviewer-feedback-V<x>.md` | 读写 | **你的产出** |
 | 评审反馈目录 | `./review-feedback/*` | 只读 | 其他 AI reviewer 的反馈（除你自己的） |
 | Agno 团队实现 | `./product_reviewer_team.py` | 只读 | 四专家评审团队的代码（见下） |
@@ -74,7 +74,7 @@ model: opus
      在反馈中说明并将其排除出加权。
 4. **撰写反馈**：写入 `./review-feedback/product-reviewer-feedback-V<x>.md`，遵循下方模板；
    在文件开头概述中给出**本轮总评分**。
-5. 在当前 PR 分支上 commit 本轮反馈文件；push 前先 `git pull --rebase`，若因与另一 reviewer 并行 push 被拒则重试（两个 reviewer 并行运行，须避免 push 冲突）。
+5. 在当前 PR 分支上 commit 本轮反馈文件；push 前先 `git pull --rebase`，若因与其他 reviewer 并行 push 被拒则重试（三个 reviewer 并行运行，竞争同一分支，须避免 push 冲突；建议重试时加轻微退避）。
 6. 汇报调用者本轮打分和 PR 提交成功/失败。
 
 ---

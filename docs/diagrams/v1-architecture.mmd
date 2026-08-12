@@ -1,0 +1,47 @@
+graph TB
+  subgraph UI["UI 层 (人机界面)"]
+    STICKY["Sticky-Note 面板<br/>(扩展: 输入抽象化)"]
+    NOTIFY["工作流通知 / 审批入口"]
+  end
+
+  subgraph ORCH["编排层 (本项目核心交付)"]
+    MGR["agent-work-manager<br/>唯一懂'进度'的组件<br/>扫描/抢lease/route"]
+    DISC["路由器 (一期: 注册表+关键字)<br/>[二期: discover agent]"]
+    WATCH["Watcher 采集层<br/>PR/Slack/文档/CICD<br/>edge-triggered 去重"]
+    SIG["signal() 标准回调<br/>waiting -> new"]
+  end
+
+  subgraph WORKER["Worker 层 (分布式,抽象)"]
+    LOCAL["本机 worker<br/>affinity=machine<br/>(一期主力,复用MCP登录态)"]
+    CLOUD["云端 worker<br/>affinity=cloud<br/>(matrix/falcon 外部依赖)"]
+  end
+
+  subgraph DATA["数据层 (StateStore 抽象接口)"]
+    DDB["云端: DynamoDB 单表<br/>(单一事实源)"]
+    SQLITE["本机实现: SQLite/文件<br/>(性能优化checkpoint)"]
+  end
+
+  subgraph EXT["外部系统 (经 MCP adaptor, 开发者身份)"]
+    GUS["GUS WI"]
+    SLACK["Slack"]
+    GH["GitHub / PR"]
+    DOC["文档 / CI"]
+  end
+
+  STICKY -->|驱动工作流| MGR
+  MGR -->|抢lease/喂上下文| LOCAL
+  MGR -->|抢lease/喂上下文| CLOUD
+  MGR --> DISC
+  LOCAL <-->|读写状态| DDB
+  CLOUD <-->|读写状态| DDB
+  LOCAL -.本地checkpoint.-> SQLITE
+  LOCAL -->|MCP| GUS
+  LOCAL -->|MCP| SLACK
+  LOCAL -->|MCP| GH
+  WATCH -->|监听| GH
+  WATCH -->|监听| SLACK
+  WATCH -->|监听| DOC
+  WATCH -->|event envelope| SIG
+  SIG -->|唤醒等待任务| MGR
+  MGR -->|回叫通知| NOTIFY
+  NOTIFY --> STICKY

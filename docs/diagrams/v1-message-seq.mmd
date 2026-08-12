@@ -1,0 +1,28 @@
+sequenceDiagram
+  participant U as 用户 (UI/Sticky)
+  participant M as agent-work-manager
+  participant S as StateStore (DynamoDB)
+  participant W as Worker (affinity=machine)
+  participant X as 外部系统 (GitHub/PR)
+  participant WA as Watcher
+
+  U->>M: 提交任务 (workid)
+  M->>S: createRoot(workid) [条件写,提交幂等]
+  S-->>M: state=A, progress=new
+  M->>S: 抢 lease (CAS: new->in-progress)
+  S-->>M: 认领成功 (恰好一个 runner)
+  M->>W: enter(input, A, substate)
+  W->>X: tool 调用 (创建 PR)
+  W->>S: checkpoint(substate) [续 lease]
+  W-->>M: output, route=spawn/toState
+  M->>S: transition 原子写下一步 (waiting: 等 PR merge)
+  Note over M,S: 用户此时可关机/断网,云端任务已持久化
+
+  WA->>X: 轮询 PR 状态 (edge-triggered)
+  X-->>WA: PR merged (状态跃迁,仅触发一次)
+  WA->>S: signal(workid, envelope) waiting->new
+  M->>S: 扫到 new,抢 lease
+  M->>W: enter(下一步)
+  W-->>M: finish(output)
+  M->>S: finishBranch, progress=finished
+  M->>U: 回叫通知 (工作流完成/待审批)

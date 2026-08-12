@@ -1,0 +1,18 @@
+flowchart TD
+  START["守护层扫描: progress in {new, in-progress+lease过期, error+retryable, timedout}"] --> AFF{"记录 affinity ?"}
+  AFF -->|"machine:X"| MCHK{"本机 daemon = X<br/>且在线?"}
+  AFF -->|"cloud"| CCHK{"云端有该 handler?"}
+  AFF -->|"cloud + on-behalf-of:user"| IDCHK{"身份代持可用?<br/>(matrix D3, 假设b)"}
+
+  MCHK -->|是| MCLAIM["本机 daemon 抢 lease (CAS)"]
+  MCHK -->|"否 (X离线)"| WARN1["只告警,不拉起"]
+
+  CCHK -->|是| CCLAIM["云端 manager 抢 lease (CAS)"]
+  CCHK -->|否| WARN2["只告警,不拉起<br/>(跨界: handler仅存于某本机)"]
+
+  IDCHK -->|是| CCLAIM
+  IDCHK -->|"否 (退化为方案a)"| WARN3["降级: 服务账号身份<br/>或告警待人处理"]
+
+  MCLAIM --> RUN["拉起 worker: enter/route"]
+  CCLAIM --> RUN
+  RUN --> DONE["transition / finish / spawn / fail"]

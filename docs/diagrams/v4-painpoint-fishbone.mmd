@@ -1,0 +1,9 @@
+graph LR
+    PP1["PP1 无处托管<br/>工具仅在本机+有人盯着时运行<br/>≈⅔ 时间窗口(夜间/周末)闲置"] --> SPINE
+    PP2["PP2 非幂等/自动化低<br/>断了从头重来 + 每人重复造持久化轮子(数天)"] --> SPINE
+    PP3["PP3 人机界面不友好<br/>并行任务受限于人能盯的 CLI 窗口(≈1-2)"] --> SPINE
+    PP4["PP4 无法自动重跑<br/>长链路数小时,人须全程在场"] --> SPINE
+    PP5["PP5 学习/使用成本高<br/>提效红利集中在极少数会攒工具链的人"] --> SPINE
+    SPINE["共同根因:<br/>人的在场/介入<br/>被迫成为工作流吞吐瓶颈"] --> EFFECT["研发效率低下<br/>AI 工具价值被锁死<br/>(仅极少数人达 ≈3×)"]
+    style EFFECT fill:#ffd5d5,stroke:#c0392b,stroke-width:2px
+    style SPINE fill:#fff3cd,stroke:#b8860b,stroke-width:2px
