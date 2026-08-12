@@ -130,7 +130,10 @@
 2. **二期若需超大树，引入分支级 PK 分片**：`PK = workid#<branchShard>`，把同一树的不同子分支散到多个分区键；"按树读"改为**按已知分支分片并行 Query 后合并**（分片数有限、可枚举）。代价是全树读从一次 Query 变成 N 次并行 Query，但换来写吞吐水平扩展。
 3. **热点监控**：复用 TCM 的 DynamoDB 分区级 CloudWatch 告警，`ConsumedWCU` 逼近分区上限即告警，先靠上限兜底、再按需分片。参考 [DynamoDB write sharding 最佳实践](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-sharding.html)。
 
-一期结论：**先用步数上限规避热分区**（简单、够内部试点用），分片作为二期水平扩展手段标注。
+**GSI2 派生背压真值查询自身的热分区（V5，回应 tech reviewer V4 视角 2.1）**：
+§2.1 的背压真值靠 `Query GSI2 where affinity=<pool> and progress=in-progress` 的 `Count` 派生——但 `affinity` 是**低基数** GSI 分区键（`cloud` / 少数 `machine:<id>`），意味着"所有 cloud 在飞任务"共享**同一 GSI item collection**：既是 Count 读的集中点，也是**每次 `progress` 状态转移都要维护一次 GSI 写**的集中点。这与上文主表 `PK=workid` 的热分区是**同构风险，只是搬到了 GSI 上**。文档提的"按 submitter 分片 Query"只降**读**量、不解 GSI 的**写**热点。缓解与主表同源：**一期步数/子分支上限同样约束 GSI2 写量**（一次状态转移一次 GSI 写，步数上限即写量上限）；**二期若上分支级 PK 分片，GSI2 的分区键也应加 `affinity#<shard>` 维度**分散写。参考 [DynamoDB GSI 最佳实践](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-indexes-general.html)。
+
+一期结论：**先用步数上限规避热分区**（简单、够内部试点用，主表与 GSI2 同受此约束），分片作为二期水平扩展手段标注。
 
 ### 1d. 选型调研（每个关键组件：≤5 候选 + 取舍）
 
@@ -165,11 +168,24 @@
 
 | 候选 | 定位 | 取舍结论 |
 |---|---|---|
-| **matrix / falcon**（公司内部） | 痛点 1 的既定解法 | **一期依赖它**跑 `affinity=cloud` worker。**外部依赖，非本项目交付**——若未按期落地，云端 24×7 能力标为排期风险，主力回退本机 worker（D3、痛点 1） |
+| **matrix（codeai/matrix）/ falcon**（公司内部） | 痛点 1 的既定解法，公司内部 agent 运行平台 | **一期依赖它**跑 `affinity=cloud` worker。**外部依赖，非本项目交付**——若未按期落地或能力不匹配，云端 24×7 能力标为排期风险，主力回退本机 worker（D3、痛点 1）。**下方专门调研 Matrix 的能力与缺口。** |
 | **AWS ECS/Fargate + EventBridge Scheduler** | 通用容器托管 + 定时触发 | matrix 未就绪时的**技术退路**（自建最小托管），重复造轮子，非优选 |
 | **GitHub Actions（self-hosted runner）** | CI 化的定时/事件触发 | 轻量场景可用（尤其 PR/CI 类 worker），非通用 agent 运行时 |
 
-**结论（组件 B）**：绑定 `matrix`，显式标注外部依赖与风险；不自建托管。
+**Matrix（codeai/matrix）专项调研（V5，回应 PR human comment「调研 matrix 的成熟度/鉴权/能否跑云端 worker/能否做状态持久化」）**：
+
+> **调研来源与置信度声明（诚实标注）**：本轮内部检索时 **codesearch（git.soma）与企业搜索（Confluence/glossaryhub）不可用**，无法直读 `codeai/matrix` 仓库与 `git.soma.salesforce.com/pages/codeai/matrix/docs/intro`（后者在 SAML 墙后）。以下依据作者此前**基于对 codeai/matrix 仓库源码级审阅**写就的对比分析（Google Doc《Claude-Tenant vs. Matrix: A Comparative Analysis》），属**二手（经作者本人源码审阅）**、未在本轮对仓库重新核验——故各条标注置信度，实施前须由 Matrix 团队一手确认。
+
+| 维度 | 调研发现 | 置信度 | 对本项目的含义 |
+|---|---|---|---|
+| **鉴权/身份模型** | 身份层是 **MAS（控制服务）为每次 agent/step/tool 签发的短时 ES256 JWT**（TTL 1h、上限 4h、`jti` 防重放）；**签名私钥不出 Falcon KMS，签名由每个 pod 的 SPIFFE 证书授权**；暴露标准 OIDC discovery。JWT 携带 `mas:caller` 三模式：`u2s`（人，带 email）/`s2s`（服务，SPIFFE，默认只读）/`internal`（cron/MEP）。 | 中-高 | Matrix 的**强身份故事是面向内部服务间（s2s）**，不是"headless agent 以用户身份认证到外部 SF org（如 GUS）"。 |
+| **外部 org 鉴权（GUS/Google）** | **平台内未解决**——GitHub/GUS/搜索经 **MCP Gateway** 走 service-mesh 身份；Google 认证是公开缺口（源文档自身标注）。 | 中 | **直接命中 OQ-2**：Matrix 强在内部 s2s，我们要的"云端 worker 以开发者身份操作 GUS/Slack（代持，假设 (b)）"**Matrix 未证明支持**——这印证 OQ-2 必须向 Matrix 团队一手确认，不能假定代持可用。 |
+| **成熟度 / 采用** | **已在生产**、org 级、有**专职内部平台团队**维护、RFC agent 目录"数以百计"、有治理/成熟度模型（on-call、eval、canary、RFC 准入闸门）。 | 中-高 | 明确的"**生产在用**"信号（非 alpha/beta）；但**未见正式"GA"标签**（仓库/wiki 本轮不可达，无法核验）。作为一期依赖，成熟度风险低于预期。 |
+| **云端 worker 执行（vs 我们的 `claude -p` 7×24）** | 每个 agent 跑在 **Falcon 上的临时 K8s pod（Agent VPE / "shadow workspace"）**，overlay 文件系统克隆 repo，**跑完即销毁**（24h/1h 回收）；框架 Mastra.ai + Claude Agent SDK；编排引擎 **Temporal**；统一入口 `POST /triggers/v1/trigger`。 | 中-高 | 真正的 per-run 隔离，适合"触发即跑一次"；**但与"常驻长监听进程"相反**。 |
+| **缺口（vs 24×7 `claude -p` watcher）** | ① **无真正调度器**：靠 **15 分钟心跳**匹配规则做"cron"，**最细粒度 15 分钟**——不适合亚 15 分钟或精确节拍；② **临时 per-run pod** 与常驻 watcher 模型相反，"持续跑并响应"须建模为触发驱动的多次 run；③ **HITL 信任边界更宽**（直接从 Slack Block Kit 按钮触发 workflow）；④ **外部 org 鉴权未证明**（委托给 MCP Gateway）。 | 中 | 我们的 Watcher/常驻监听模型与 Matrix 的触发驱动 per-run 模型需**适配层**：把常驻 watch 建模为 Matrix 的"触发规则 + 多次 run"，或**本机 daemon 保留常驻监听、只把 worker 执行 offload 到 Matrix**。15 分钟调度粒度对 PR/CI 类边缘触发多数够用，精确节拍类留本机。 |
+| **状态持久化** | 生产用 **Temporal** 做 durable workflow 状态/编排；Falcon/Terraform + Flyway 管声明式 trigger/config。 | 中 | **未见"agent session checkpoint 数据存储"的显式描述**（除 Temporal 的 durable execution）——"durable agent-session checkpointing"**未充分文档化**，是须向 Matrix 团队确认的缺口。这也意味着**我们的 StateStore（DynamoDB 单表）与 Matrix 的 Temporal 是两套持久化**：一期我们仍以自有 StateStore 为单一事实源，Matrix 仅作 worker 执行位置，不依赖其内部状态模型。 |
+
+**结论（组件 B，V5 更新）**：一期仍绑定 `matrix` 作为 `affinity=cloud` worker 的执行位置，但调研澄清了三条关键边界——(1) **鉴权**：Matrix 的强身份是内部 s2s，**外部 org（GUS）代持未证明**，直接抬高 OQ-2 的确认优先级；(2) **执行模型**：Matrix 是临时 per-run pod + 15 分钟调度，与我们的常驻 watcher 模型不同，需"常驻监听留本机 / worker 执行 offload 到 Matrix"的适配；(3) **持久化**：Matrix 用 Temporal，我们仍以自有 StateStore 为单一事实源、不依赖 Matrix 内部状态。成熟度上 Matrix 是"生产在用"（风险低）。这些边界共同支撑一期"**本机 worker 为主力、云端 Matrix 为增强而非前置依赖**"的稳健定位，并把 OQ-2 从"待确认"升级为"有明确疑点待确认"。
 
 #### 组件 C：鉴权（"以谁的身份调外部系统"）
 
@@ -192,6 +208,47 @@
 | **DynamoDB Streams** | 表变更驱动引擎扫描 | 引擎扫描"先轮询、量大再上 Streams"（`工作流模版.md` §7），一期轮询 |
 
 **结论（组件 D）**：一期 = event envelope schema + Watcher 契约 + 预定义 watcher（Slack/PR/CI-CD/GUS 等）+ `signal()` 标准回调 + dedup 表 + 本机回调 push（云端按需 SQS）。稳定性/授权：SQS/EventBridge 为 AWS 托管商业服务，公司已在生产使用，商用无障碍。
+
+### 1e. 云端 StateStore 的写入鉴权、Provision 路径与数据安全（V5，回应 PR human comment）
+
+human comment 提出四个具体问题：**(1) 本机的编排层/worker 如何被授权写云端 DynamoDB？(2) 如何防止人直接删/改这些数据（数据安全）？(3) PCSK 是什么、Falcon「provision resource」vs ad-hoc vs 本地存储怎么选？(4) Matrix 是否支持云端存储？** 本节据内部调研逐条作答。
+
+> **调研来源与置信度声明**：本轮 codesearch 与企业搜索不可用（无法读 glossaryhub 的 PCSK 词条正式定义）；以下依据 **Google Drive 内部一手文档**——《Login with PCSK》（Anastasia Bidne）、TCM 一则 **RCA 事故复盘**（含确切文件路径与命令）、作者自己的《The Always-On Agent Runtime》设计文档（含具名先例）。**PCSK 的机制**置信度高（多文档印证），但 **PCSK 的字面缩写展开未核实**（glossaryhub 不可达）——本文**不臆断其全称**，只描述其机制。
+
+#### (1) 本机 → 云端 DynamoDB 的写入鉴权：分「人的身份」与「服务的身份」两条路径
+
+关键区分：**一期主力是开发者本机手动/半自动启动 worker（人的身份），二期云端常驻是服务身份**——两条路径的鉴权机制不同，且都**不使用长期存储的 AWS 密钥**。
+
+- **路径 A — 人的身份（一期本机 worker 写云表，主力）= PCSK（JIT AWS 访问）**：
+  - **PCSK 是真实存在的内部机制，且正是本场景的答案**（置信度：机制高）。它是一套 **JIT（just-in-time）AWS 访问系统**，入口 `https://dashboard.prodga.aws.jit.sfdc.sh`。流程：**Yubikey 登录 → 对特定 AWS 账户提交访问申请 → 列表内审批人批准 → "Get Credentials"**。凭据三种交付方式：启动 AWS 控制台（GUI）、**Export 出短时 AWS CLI 环境凭据**贴进终端、或 IntelliJ AWS Toolkit。均为**短时、按账户、绑人身份**的凭据。
+  - **这正是"已认证的内部人（非服务）从笔记本写 AWS（DynamoDB 等）"的合规路径**，与一期"开发者本机 worker 以本人云凭据直连云表"（决策 D1）完全对齐。
+  - **PCSK 访问是时间盒的、需周期性重新申报**（旁证：TCM 有"31 天 PCSK prod 访问"表、Zeus PCSK/AWS 访问对账表）——意味着一期"本机长跑"依赖的云凭据会**定期过期**，与 §2.6「MCP OAuth 过期 → 只告警不硬跑、由人 Reconnect」是**同一类过期问题**，本设计统一按"过期即告警、由人续期"处理，不假定凭据永不过期。
+- **路径 B — 服务的身份（二期云端常驻 worker 写云表）= IAM Role / 实例 Profile（无存储密钥）**：
+  - 二期 `affinity=cloud` 常驻 worker 跑在 Falcon 上，写云表走 **Falcon 服务的 IAM Role / 实例 profile**——**无长期密钥**、由平台注入。GUS 侧的具名先例：`sales-growth-bot@gus.com` 服务账号跑在 Falcon 上、走 **JWT Bearer**、密钥存 Vault（置信度高，作者设计文档具名）。秘密走 **AWS Secrets Manager / Vault** 运行时注入。
+  - 这条路径也是"云端 worker 以何种身份操作外部系统"的落点——与 OQ-2（Matrix 代持 vs 门禁）耦合：若 Matrix 只给门禁（假设 a），云端 worker 用服务账号身份；若给代持（假设 b），才可能以用户身份。
+
+#### (2) 数据安全：防止人直接删/改（最小权限 + 防误删）
+
+一期云表是编排的单一事实源，**误删 = 全量停摆**。内部有直接教训可citable：一则 TCM RCA——一次为清 lint 告警执行的 `falcon addons tidy --all` **误删了一张 tier-1 DynamoDB 表（`userManagementWorkArea`），造成 dev/perf/test/stage 全线 user-ops 故障**（置信度高，事故复盘含确切命令）。据此，一期数据安全约束：
+
+1. **Terraform `lifecycle { prevent_destroy = true }` 加在 tier-1 资源上**（凡丢失即中断服务的资源）——直接吸收上述 RCA 的首要教训，防"一条 tidy 命令删库"。
+2. **apply 前必须人工审阅 Terraform plan**：dev 可自动 apply，stage/prod 须人工判断步；**绝不 apply 可疑 plan**。
+3. **最小权限、按 workload 分权**（作者设计文档原则）：report-poster 只有 Slack-write、triage agent 只有 GUS 读 + 有限写，**无任何 worker 拿到 blanket 访问**；对云表，worker 的 IAM 策略**只授予自己 submitter 分区的读写**，不授予 `DeleteTable`/全表 `DeleteItem` 等破坏性权限。
+4. **审计可归因**：所有有副作用的操作走 **AWS-IAM 认证路径以便 CloudTrail 记录真实 principal**；写归因到 bot、对人的操作归因到人。表数据本身 append-only + 软删（`progress=archived` 而非物理 delete），物理删除权限收归运维专用角色。
+5. **恢复代价已知**：误删表的恢复非平凡（手动 AWS 恢复会让 Terraform state 失配 `ResourceInUseException`，需 Spinnaker import pipeline 重新 import state）——故**重预防（prevent_destroy）轻恢复**。
+
+#### (3) Provision 路径：Falcon addon（config-as-code）vs ad-hoc vs 本地存储
+
+- **本地存储（一期 dev / 单机试点起步）**：StateStore 的本机实现 = SQLite/文件（§1a 数据层）。**零 provision、零鉴权成本**，适合单人 dogfood 起步与本机 checkpoint。但**非多机/云端共享的事实源**。
+- **Falcon addon（推荐的云端轻量路径）**：DynamoDB 表声明为 **Falcon "addon"**——`falcon/addons/*.tf` 里的一个 Terraform 文件（先例：`falcon/addons/dynamodb-workarea.tf` 声明 `userManagementWorkArea`），经 **SFCI + Spinnaker provision pipeline** apply（置信度高，RCA 含确切路径）。这是"config-as-code 的轻量路径"：**加一个 addon `.tf` → 审阅 Terraform plan → pipeline apply**；表的写权限经**服务的 Falcon IAM role**下发，非存储密钥。
+- **ad-hoc（不推荐）**：手工在 AWS 控制台建表/给权限——会与 Terraform state 脱钩、不可复现、审计弱，仅限一次性实验。
+- **结论**：一期 **dev/单机用本地 SQLite 起步**（零成本验证），**云端共享事实源用 Falcon addon**（config-as-code + IAM role + prevent_destroy），**不走 ad-hoc**。这条选择同时满足写入鉴权（路径 A/B）与数据安全（第 (2) 节）。
+
+#### (4) Matrix 是否支持云端存储？
+
+据组件 B 调研：**Matrix 的持久化是 Temporal（durable workflow 状态）+ Falcon/Terraform 管声明式 config**，**未见面向 agent 的通用"云端数据存储"供第三方 worker 自由读写的显式能力**（置信度中，仓库本轮不可达）。含义：**我们不应假定 Matrix 提供我们要的 StateStore**——一期仍以**自有 DynamoDB 单表（经 Falcon addon provision）为单一事实源**，Matrix 只作 `affinity=cloud` worker 的**执行位置**，两套持久化解耦（呼应组件 B 结论）。若 Matrix 团队确认可复用其存储层，二期再评估收敛，但**不作为一期前置依赖**。
+
+> **本节带出的 OQ 更新**：PCSK 凭据过期节奏（路径 A）、Matrix 外部 org 代持（路径 B / OQ-2）、Falcon addon 的 provision owner —— 均并入 project-analyst §5 的 OQ owner+deadline 跟踪；数据安全约束（prevent_destroy / 最小权限 / append-only 软删）落 `工作流模版.md` 持久化约束。
 
 ---
 
@@ -231,7 +288,11 @@ V3 的在飞计数「认领时 `ADD +1`、完成/失败时 `ADD -1`」有一个*
 - **实现**：背压判定改为「守护层周期性 `Query GSI2 where affinity=<pool> and progress=in-progress, Select=COUNT`，按 submitter 分片求和」，用该派生值与阈值比较，而非读独立计数器。
 - **保留计数器的备选**：若压测显示 GSI Count 频率过高，可保留原子计数器**但叠加 lease 过期驱动的周期性 reconcile**（守护层重扫时用 GSI Count 重算 shard 真值、覆盖漂移的计数器）——把计数器降级为「缓存」、GSI Count 为「事实源」。一期默认走前者（派生真值，无缓存一致性负担）。参考 [DynamoDB atomic counters 的已知局限](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html#WorkingWithItems.AtomicCounters)（非幂等、crash 下不可回滚）。
 
-**背压是软上限、非硬保证（显式标注，回应 tech reviewer V3 视角 2/3）**：无论派生 Count 还是分片计数，多实例并发认领下背压阈值判定都是**最终一致读**，存在窗口误差——可能瞬时略超上限后收敛。**一期明确把背压定位为「软上限」（防雪崩的软阀门），而非精确闸门**；需要硬上限的地方（如 per-workspace token 预算）用**单项记录上的 CAS 硬约束**（强一致），不依赖聚合计数。下游消费方不应把背压当精确闸门。
+**背压是软上限、非硬保证（显式标注，回应 tech reviewer V3 视角 2/3；V5 补论证闭环，回应 tech reviewer V4 视角 2.2）**：无论派生 Count 还是分片计数，多实例并发认领下背压阈值判定都是**最终一致读**，存在窗口误差——可能瞬时略超上限后收敛。**一期明确把背压定位为「软上限」（防雪崩的软阀门），而非精确闸门**；需要硬上限的地方（如 per-workspace token 预算）用**单项记录上的 CAS 硬约束**（强一致），不依赖聚合计数。下游消费方不应把背压当精确闸门。
+
+> **软上限不只是「选择」，而是 GSI 机制下的「必然」（V5 补，让软/硬约束分层论证完全闭环）**：DynamoDB **GSI 本就不支持强一致读**——派生 Count 天然滞后（GSI 传播延迟 + 守护层周期扫描间隔）。因此"背压必须是软上限"不是我们主观选的宽松策略，而是**从记录派生真值 + GSI 只读最终一致**这两条一叠加就无法回避的结论；反过来说，**任何需要强一致的硬上限（token 预算）就只能走单项记录的 CAS**（强一致条件写），不可能建立在聚合 Count 之上。软约束走 GSI 派生、硬约束走单项 CAS——这条分层由此完全闭环。
+
+**GSI2 Count 扫描周期纳入压测调参（V5，回应 tech reviewer V4 视角 3.1）**：派生真值靠守护层"周期性 Count"——扫描间隔越长、背压反应越滞后（可能瞬时超上限更多）；越短、GSI 读成本越高。这是与 **lease TTL / 心跳间隔**同类的实现期调参项，一期不定死数字，**列入性能压测调参清单**：`{GSI2 Count 扫描周期, lease TTL, 心跳间隔, dedup 表 TTL}` 一并在试点压测中定频，用"背压新鲜度 vs GSI 读成本"的实测曲线选点。
 
 ### 2.2 signal 幂等 / 去重 + fan-out 重放防护（P0）
 
@@ -351,7 +412,8 @@ V3 的 Agentforce 技术桥停在「Action 回调走 Platform Event 还是 notif
 
 - **把 Agentforce Action 当「至多一次触发、结果异步回调收敛」的黑盒**：编排器 `submit` 触发一个 Agentforce Action 后，**不把 Agent session 内部的推理纳入 replay 校验**——session 内部的非确定性推理由 Agentforce 自己负责，编排器只在其边界上做幂等（触发用 dedup-key 保证至多一次，结果通过异步回调收敛）。这样两套状态模型（我们的可倒带 checkpoint vs Agentforce 的不可倒带 session）在**边界解耦**，不互相污染。
 - **回调统一走 Platform Event（建议结论，非"或"）**：Action 完成/超时的异步回调**统一走 Platform Event**——与本项目 Watcher/envelope 设计天然对齐（Platform Event 作 Watcher 源 → envelope → signal），避免 Agentforce notification 与 Platform Event 双通道。
-- **`workid` ↔ Agentforce session 生命周期映射**：编排器 `workid`（长跑、可续跑）与 Agentforce session（对话态、可能短命）**不是一一对应**——一个 `workid` 可跨多次 Action 触发；映射关系在 adapter 层维护为「`workid` → 最近一次触发的 session/execution id」，session 结束不等于 workid 结束。
+- **`workid` ↔ Agentforce session 生命周期映射**：编排器 `workid`（长跑、可续跑）与 Agentforce session（对话态、可能短命）**不是一一对应**——一个 `workid` 可跨多次 Action 触发；映射关系维护为「`workid` → 最近一次触发的 session/execution id」，session 结束不等于 workid 结束。
+  - **该映射本身是须持久化的 durable 态（V5，回应 tech reviewer V4 视角 4.1）**：这份 `workid↔session` 映射**本身就是状态**——若只存 adapter 进程内存，adapter 重启即丢失、回调回来找不到对应 workid。因此实现阶段**该映射必须落 StateStore（而非 adapter 内存态）**，作为 workid 记录上的一个字段或关联项持久化；跨多次 Action 触发时映射的更新走**单项 CAS**（与 lease 同款条件写）保证原子。**触发复用 dedup-key 保证至多一次**：Action 触发的 dedup-key = `workid#stepIndex#actionName`，触发前条件写 `attribute_not_exists`——重放同一步只触发一次 Action，映射更新与"至多一次触发"由同一把 CAS 锁串起。这与 §2.2 signal dedup 是同一套幂等原语，无需新机制。
 - **stateFingerprint 扩展校验 Prompt 版本**：远期若接入 Prompt Builder，stateFingerprint 除校验「代码/状态图版本」外，应**同时校验 Prompt 模板版本**——解决"prompt 改了、code 没改"的隐性非确定性。
 - 以上均列为 **OQ-5**（project-analyst §5），交 Agentforce 平台架构团队 + 本项目 owner 联合裁决，deadline 放闸门 B 前。
 
@@ -417,6 +479,18 @@ V3 的"干净/空 org 冒烟"被 product reviewer 正确指出是**更弱替代*
 ---
 
 ## 修订区（Changelog）
+
+### V5 — 2026-08-12（回应 PR #4 新一批 human comment + tech reviewer V4 反馈）
+
+**变更时间**：2026-08-12。**本文档（技术设计）相较 V4 的主要改进**：
+
+1. **§1e 新增「云端 StateStore 写入鉴权、Provision 路径与数据安全」（回应 PR human comment：DynamoDB 本机写授权 / 数据安全 / PCSK / Falcon provision vs ad-hoc vs 本地存储 / Matrix 是否支持云端存储）**：据内部一手文档调研——(1) 写入鉴权分「人的身份 = **PCSK**（JIT AWS 短时凭据，Yubikey 登录 + 审批 + Export CLI 凭据，一期本机主力）」与「服务身份 = IAM Role/实例 profile 无存储密钥（二期云端，GUS 具名先例 `sales-growth-bot@gus.com`）」；(2) 数据安全据 TCM 误删 tier-1 表 RCA 得出 `prevent_destroy` + apply 前人工审阅 plan + 最小权限按 workload 分权 + append-only 软删 + CloudTrail 归因；(3) Provision 选 **Falcon addon（config-as-code）**，dev 用本地 SQLite 起步、不走 ad-hoc；(4) Matrix 持久化是 Temporal，不假定其提供通用云端存储，我们仍以自有 DynamoDB 为单一事实源。**附调研可用性/置信度声明**（codesearch/企业搜索本轮不可用，PCSK 缩写全称未核实、不臆断）。
+2. **§1d 组件 B Matrix 专项调研（回应 PR human comment：调研 matrix 成熟度/鉴权/云端 worker/状态持久化）**：新增调研表——鉴权 = MAS 签发短时 ES256 JWT + SPIFFE 授权签名（强在内部 s2s，**外部 org/GUS 代持未证明，直接抬高 OQ-2 优先级**）；成熟度 = 生产在用、专职团队、RFC 目录数百（非 alpha/beta，未见正式 GA 标签）；云端 worker = Falcon 临时 K8s pod 跑完即销毁 + **15 分钟心跳调度粒度**（与常驻 watcher 模型不同，需适配）；持久化 = Temporal（与我们自有 StateStore 两套、解耦）。**附来源与置信度声明**（二手经作者源码审阅、本轮未重核）。
+3. **§1c GSI2 派生背压的自身热分区（回应 tech reviewer V4 视角 2.1）**：连一句边界——`affinity` 低基数 GSI 分区键使"cloud 在飞任务"集中在单一 GSI item collection，Count 读 + 每次 progress 转移的 GSI 写都集中，与主表 `PK=workid` 热分区同构；一期步数上限同样约束 GSI2 写量，二期分片时 GSI 分区键加 `affinity#<shard>`。
+4. **§2.1 软上限论证闭环 + GSI2 Count 扫描周期调参（回应 tech reviewer V4 视角 2.2/3.1）**：补"GSI 不支持强一致读 → 背压软上限是必然非选择、硬上限只能走单项 CAS"使软/硬约束分层论证闭环；GSI2 Count 扫描周期与 lease TTL/心跳间隔一并列入压测调参清单。
+5. **§3 AgentforceActionAdapter 的 `workid↔session` 映射落 StateStore（回应 tech reviewer V4 视角 4.1）**：明确该映射本身是 durable 态、须落 StateStore（非 adapter 内存态）、更新走单项 CAS；Action 触发复用 dedup-key（`workid#stepIndex#actionName`）保证至多一次，与 §2.2 signal dedup 同一套幂等原语。
+
+> 以上数据安全/持久化约束（prevent_destroy / 最小权限 / append-only 软删 / PCSK 凭据过期按"过期即告警"处理）同步落 `工作流模版.md`，并在 `design-notes.md` 记录理由。
 
 ### V4 — 2026-08-11（回应 PR #4 新一批 human comment + tech/product reviewer V3 反馈）
 

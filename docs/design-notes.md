@@ -310,3 +310,31 @@
 - presentation 抽取版：标为 [OPEN QUESTIONS]，倾向另出独立文件而非塞进报告；本轮先确保 §0.0 决策卡可独立支撑 3 分钟 pitch。
 
 **版本**：V4。commit + push 到已存在的 PR #4（复用，绝不重复 create）。未 merge（人类决定）。
+
+---
+
+## V5 修订要点（2026-08-12，回应 PR #4 剩余 3 条 unresolved human comment + tech/product/leadership V4 反馈）
+
+### 本轮处理的 3 条 unresolved human comment（HC-1/2/3）
+- **HC-1（ENG360「3×」信号来源，project-analyst §0.3(0)）**：把口头的"≈3×"锚定到 [Engineer360 Developer Productivity 仪表盘](https://epicorg.lightning.force.com/tableau/dashboard/ENG360_Developer_Productivity_Preview/view) + 截图 `v5-eng360-3x.png`（作者 Jianshan Xie 第 1、EO=105.07，第 2 名 87.96，其余 27–62，倍数 2–3.7×，Token Spend per EO ≈$50）。诚实框定 n=1、归因未隔离——与 §3a 度量方案的 ≥1.5× 降级判据一致，不因有仪表盘就上调主张。
+- **HC-2（DynamoDB 写入鉴权 + 数据安全 + provision 路径，tech-design 新增 §1e）**：
+  - **写入鉴权两条路径**：(A) 人的身份（本机开发者）= PCSK 短时凭据（内部 JIT AWS 访问，Yubikey 登录 + 审批 + 短时 CLI 凭据，31 天 time-boxed）——是内部已认证的人从笔记本写 DynamoDB 的正规路径；(B) 服务身份（云端 worker/引擎）= IAM Role/instance profile（无存储密钥），GUS 走 JWT Bearer + `@gus.com` 服务账号（先例 `sales-growth-bot@gus.com` 在 Falcon，key 在 Vault）。
+  - **数据安全**：`lifecycle { prevent_destroy = true }`、human-review Terraform plan、每工作负载最小权限、append-only 软删除、CloudTrail 归因。RCA 教训：`falcon addons tidy --all` 曾误删 tier-1 表 `userManagementWorkArea` → TCM outage，故一期即限制人类直接删改数据。
+  - **provision 路径**：本地 SQLite 起步（若太复杂）/ Falcon addon（`falcon/addons/*.tf`，经 SFCI+Spinnaker 管线）推荐 / adhoc 部署不推荐。
+  - **置信度声明**：codesearch/企业搜索本轮鉴权失败（"Not connected"/"Token expired"整场不可用），PCSK 全称未在 glossaryhub 核实——§1e 已显式标注来源与置信度，**未臆断 PCSK 缩写全称**。
+- **HC-3（Matrix 专项调研，tech-design 组件 B 新增调研表）**：Matrix（codeai/matrix）已在生产；MAS 铸造短时 ES256 JWT + SPIFFE 证书授权签名（Falcon KMS）；Falcon 上临时 K8s pod；Temporal 存状态；15 分钟心跳调度器；外部 org（GUS/Google）鉴权委托 MCP Gateway，**未解决我们的"代持"用例** → 直接抬升 OQ-2 优先级（"待确认"→"有明确疑点待确认"）。结论：一期本机为主力、云端 Matrix 为增强而非前置依赖，状态用自有 DynamoDB，不假定 Matrix Temporal。**Matrix repo 本轮不可直接访问**，调研基于作者本人的源码级审阅对比文档，表内标注来源/置信度。
+
+### 其余 reviewer V4 反馈处理
+- **tech V4（8.7）三条 P2/P3 实施期细节**（全落 tech-design）：① §1c GSI2 派生背压真值查询自身热分区风险（affinity 低基数 → GSI 分区键同构；步数上限约束写量、二期加 `affinity#<shard>` 打散）；② §2.1 GSI2 Count 扫描周期纳入压测调参项；③ §3 AgentforceActionAdapter 的 `workid↔session` 映射本身是须持久化的 durable 态（持久化到 StateStore、CAS 更新、dedup-key=`workid#stepIndex#actionName`）。
+- **product V4（8.1）**：采纳 FDE 试点可审计 gate（§2c）、R10 数量级初判（§4）；建议管理层把需求侧 gate 写入闸门 B（§0.4）；OQ-3 时间衰减敏感度行**不采纳**（可选增强、非硬伤，保留二期再补，避免立项材料膨胀）。
+- **leadership V4（8.0，conditional-GO 维持）**：采纳 M1 埋点即验收（§2c + §3a M1 行）、需求侧 gate 建议（§0.4）；闸门 A 战略裁决为管理层动作、报告侧已就位，留作 kickoff 行动项；presentation 抽取版维持 deferred（[OPEN QUESTIONS]，待管理层确认展示形式）。
+
+### 底层设计文档改动（工作流模版.md）
+- **V5 加数据安全/持久化约束注记**：把 HC-2 的数据安全原则（`prevent_destroy`、每工作负载最小权限、append-only 软删除、人类不得直接删改状态数据）与 PCSK 短时凭据过期处理（**凭据过期即告警，不硬跑**，与 D2 的 OAuth 过期"只告警不硬跑"同一原则）落到 工作流模版.md，保持主设计与底层持久化/恢复逻辑一致。
+
+### 反馈处理与标记
+- 3 条 unresolved review thread（ENG360 / DynamoDB 鉴权 / Matrix 调研）逐条在 V5 落地，处理后用 GraphQL resolveReviewThread resolve，并回复 `Resolved in V5`。
+- V4 后的 PR issue-comment 均为 reviewer 自身发布的评分公告（已由评审工作流自处理），无新增需回应的人类 issue-comment。
+- 三份 V4 reviewer 反馈（tech 8.7 / product 8.1 / leadership 8.0，各只读最新轮次）逐条在 V5 Q&A 回应。
+
+**版本**：V5。commit + push 到已存在的 PR #4（复用，绝不重复 create）。未 merge（人类决定）。

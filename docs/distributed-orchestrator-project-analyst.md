@@ -100,6 +100,16 @@
 
 作者本人用自建的一套原型工具（wi-researcher/wi-worker 自动化 + sticky-note 人机界面 + WI-chatter 状态持久化 + PR/Slack/GUS 监听 + 本机带登录态的 job scheduler），已能**同时并行推进 4–5 个 WI、全程无需在 CLI 内交互**，Engineer360 口径下产出约为团队他人的 **≈3×**。这是 **n=1、作者本人、归因未隔离、代理指标（WI 数 + 代码量）**的早期个人信号，**不是产品级结论**——本报告据此提出**可规模化验证的试点假设 + 度量方案**（§2c、§3a），把它当立项理由而非既成事实。
 
+**（0）"≈3×" 效率信号的客观来源 = Engineer360 仪表盘（回应 human comment）**
+
+这条 "≈3×" 不是自述，而是来自公司内部可核验的 **Engineer360 / ENG360 Developer Productivity 仪表盘**（[ENG360 Developer Productivity Preview](https://epicorg.lightning.force.com/tableau/dashboard/ENG360_Developer_Productivity_Preview/view)，公司内网可核验）。下图为该仪表盘按 **Effective Output（有效产出单位）**排序的实拍——**第一行即作者本人 Jianshan Xie**：
+
+![Engineer360 有效产出对照：作者本人位列第一](diagrams/v5-eng360-3x.png)
+
+> *（Engineer360 实拍：作者 **Jianshan Xie 有效产出 = 105.07 单位、全表第一**，明显高于同表其余工程师——第 2 名 87.96、其余多数落在 27–62 区间。相对表中中位数量级（≈50）与多数同侪，作者的有效产出约为 **2–3.7×**，"≈3×" 即由此量级信号概括而来。同表还给出 Refactor Rate / Rework Rate / Token Spend / Token Spend per EO / Code Maintainability——作者的 Token Spend per EO ≈ $50，处于低位区间，说明高产出并非靠"多烧 token"堆出。）*
+>
+> **诚实边界（承接 §2c、技术设计 D5）**：这仍是 **n=1、作者本人、归因未隔离、代理指标**的信号——Effective Output 是产出代理，且未隔离"工具贡献 vs 个人因素"；仪表盘证明的是"作者的确产出领先"，**不等于**"编排器一定能让他人复现"。这恰恰是一期试点（§3a 度量方案）要在 Engineer360 同一口径下、用**试点组 vs 对照组**验证的东西——把这条客观但 n=1 的信号，规模化为**团队可复现的 ≥1.5×**。
+
 **（1）人机界面 = sticky-note：一屏看清 + 一键驱动**（总览见 §0.0 开篇的整体截图）
 
 ![sticky-note 人机界面](diagrams/v3-sticky-note.png)
@@ -144,7 +154,7 @@ sticky-note 面板把 GUS WI 按 **In Progress / Done / Todo** 分组呈现，�
   3. **每-WI token 成本**达到设定上限内（不失控烧钱，§3a）；
   4. **使用强度/信任代理指标为正**（§2c 给出具体口径；付费意愿本身留二期真实预算认领测试）。
 
-**理由**：一期投入极小、与公司头号战略（Agentforce 数字劳动力叙事）强对齐、退路清晰（matrix 未就绪回退本机 worker）、团队诚实（3× 已降级为 ≥1.5× 试点判据）——值得给机会（GO）；但**重复投资顾虑未被战略层背书 + ROI 未在多人复现**，决定了现在只能为"内部工具试点"买单、不能为"商业产品"买单（Conditional）。
+  > **建议管理层在闸门 A 裁决时一并把「需求侧 gate」写入闸门 B（V5 强化，回应 product V4 建议 4 + leadership V4 P1）**：上列 4 条 gate **全是供给侧**（吞吐 / 介入率 / token / 内部信任代理）——它们证明"内部工程师越来越愿意托管"，但不证明"外部买方愿掏预算"。据 §2b 买方画像，建议**二期加码前追加第 5 条需求侧 gate**：「该买方画像（已部署 Agentforce、有 AI-ops/可靠性预算线的平台工程/研发效能负责人）下，至少一个真实部门在预算认领意向测试中愿为此付费」。这把商业判断从"愿景"钉到"有人愿掏预算"。**此条属管理层动作**（headless writer 无法代管理层钉死 gate），故列为闸门 A 裁决时的建议附带项，而非 writer 单方写死。一期投入极小、与公司头号战略（Agentforce 数字劳动力叙事）强对齐、退路清晰（matrix 未就绪回退本机 worker）、团队诚实（3× 已降级为 ≥1.5× 试点判据）——值得给机会（GO）；但**重复投资顾虑未被战略层背书 + ROI 未在多人复现**，决定了现在只能为"内部工具试点"买单、不能为"商业产品"买单（Conditional）。
 
 **为何与公司战略同向（给战略层的一句话）**：本项目要做的「让任意 AI agent 7×24 可靠长跑、断点续跑、被统一编排、到点叫人审批」，正是 [Agentforce](https://www.salesforce.com/agentforce/)「数字劳动力」叙事所缺的**运行时 / 编排运维层**——一期交付物按「可被 Agentforce 复用的编排底座候选内核」设计（§2d、§3a），让这笔投入在"内部工具"与"战略资产"两条线复用。「编排底座候选内核」的技术边界与接口草图见 [技术设计文档](./distributed-orchestrator-tech-design.md)（§2.4 异构 runtime adapter、§3 AgentforceActionAdapter 契约）及本文 §2d「Agentforce/Platform 技术桥」。
 
@@ -253,7 +263,10 @@ sticky-note 面板把 GUS WI 按 **In Progress / Done / Todo** 分组呈现，�
    | **决策委托范围** | 工程师**批准编排器自动推进的阶段占比**（vs 坚持每步手动签收）——越高代表越信任 | pr-gate / 签收点日志统计 |
 
    三者**都从编排器自产的审计轨迹算出**（§2c 第 5 点），无需额外问卷，且随试点自然积累；任一为正、且随迭代走高，即"内部用户越来越信任、越愿把工作托付给编排器"的先行信号——它是**付费意愿的必要非充分前置**（自己人都不敢放手托管的工具，买方更不会付费）。二期再把它升级为一次真实的**内部部门预算认领意向测试**（需求侧、比问卷更硬，才是真正的"付费意愿"，回应 product reviewer 建议）。
+
+   > **「M1 即接入埋点」写死为一期验收项（V5 新增，回应 leadership reviewer V4 P1 + 未决问题）**：这三条指标的审计轨迹采集管道必须在 **M1（内核 MVP）第一天随 StateStore 一起上线**，而非留到 M4 才补——否则闸门 B 第 4 条 gate 到试点末期才有数据、拿不出周环比曲线。因此把「**M1 交付即含这三条指标的采集埋点（从 StateStore 审计轨迹 + 回叫/签收日志直接算出，零问卷），并在 M1 起产出周环比曲线**」作为 M1 的**显式验收项**（见 §3a M1 行），而非 M4 的收尾动作。这是零额外成本项（埋点即 StateStore 审计轨迹本身，无需新建管道），只是把采集时点从"试点期"提前钉到"内核上线第一天"。
 4. **FDE 结合（真实客户场景的桥）**：FDE（Forward Deployed Engineer）常年在客户现场做定制自动化——他们是**把内部编排器带到真实客户用例**的天然通道。一期末期邀请 1–2 名 FDE 试用，用他们的客户场景反推 worker 抽象是否够通用；二期正式培训 FDE、收集客户用例。
+   - **FDE 试点可审计成功判据（V5 新增，回应 product reviewer V4「本轮唯一 writer 可解的实质残留」）**：工程师侧有闸门 B 的 4 条可审计 gate，FDE 侧此前只有「邀请试用」这种无判据的定性动作，容易变成「邀请了、聊了、没结论」。据此补一条**与闸门 B 对齐的可审计 gate**——**「1–2 名 FDE 能否在无核心团队实时支持下、≤3 天内针对自己客户场景跑通一个最小 workflow（含至少一次断点续跑 + 一次人工审批回叫）」**。达标 = worker 抽象对非作者、非核心团队的真实客户场景足够通用、上手成本可接受；不达标则暴露"通用性/文档/Provider 抽象"缺口，是二期 FDE 培训的直接输入。此 gate 属**技术设计 §4 dirty-org 冒烟之外的第二件事**——冒烟测「兼容性怎么测」，本 gate 测「FDE 试点算不算成功怎么判」。
 5. **反馈闭环工具化**：编排器本身产生的审计轨迹（append-only 全历史）就是产品分析数据——哪些 worker 常失败、哪些状态常卡、人工介入率多高，直接指导迭代。
 
 **FDE 现场落地需解决的问题（一期只点名、不求确切方案，回应 human comment + product reviewer FDE 卡点）**：
@@ -319,7 +332,7 @@ sticky-note 面板把 GUS WI 按 **In Progress / Done / Todo** 分组呈现，�
 
 | 里程碑 | 内容 | 工期（1–2 名工程师） |
 |---|---|---|
-| **M1 内核 MVP** | StateStore(DynamoDB) + 引擎主循环 + lease/CAS + 幂等/恢复；单机 dogfood 跑通 1 个 workflow | 档位1：3–5 人周 / 档位2：8–12 人周 |
+| **M1 内核 MVP** | StateStore(DynamoDB) + 引擎主循环 + lease/CAS + 幂等/恢复；单机 dogfood 跑通 1 个 workflow；**含 §2c 三条使用强度/信任代理指标的审计轨迹埋点（V5 起写死为 M1 验收项，回应 leadership V4 P1）** | 档位1：3–5 人周 / 档位2：8–12 人周 |
 | **M2 affinity + 云端** | 本机 daemon + 云端引擎分区认领；liveness 改派；接 matrix（依赖其就绪） | 2–4 人周 |
 | **M3 采集层 + 护栏** | Watcher 契约 + envelope + dedup + `signal()`；熔断/背压/token 预算 | 3–4 人周 |
 | **M4 人机闭环 + 试点** | sticky-note 输入抽象 + 通知/审批 + 局部失败面板；3–5 人试点 + Engineer360 度量 | 3–4 人周 |
@@ -405,7 +418,7 @@ sticky-note 面板把 GUS WI 按 **In Progress / Done / Todo** 分组呈现，�
 | R7 | 范围蔓延（discover/图形化/终端用户被提前拉进一期） | 一期延期 | 本报告已明确降级清单（§3a「一期不做」），严格守边界 |
 | R8 | **LLM token 失控烧钱**（本版新增，回应 product reviewer P0） | 成本与安全双重风险 | per-workspace token/attemptCount 硬上限 + 熔断（技术设计 §2.1）；memoization 省重复调用 |
 | R9 | **客户现场无 matrix/MCP/GUS/DynamoDB 底座**（可移植性悬崖） | FDE 带向客户时需重写多层 | 可外带 IP 内核 + 可插拔 Provider（技术设计 §4）；一期埋「非 SF-internal 环境冒烟」判据 |
-| R10 | **下游外部 API 限额**（本版新增，回应 engineering reviewer V3 P2）：15–25 并发 workspace 跑 WI 循环时，对 **SF Core API 每日请求限额 / GUS / Slack / GitHub API** 的消耗此前从未测算——这些系统各有 governor limits，一期护栏只防我们自己的 LLM 调用风暴，**不防下游 governor limits** | 撞下游限额 → 采集/驱动链路 429/被限流、WI 卡住 | 一期即测算每 workspace 下游调用量级 × 并发数，对照各系统已知限额给撞限额判断；用与 R8 同框架（**每类外部 API 独立令牌桶 + 熔断 + 退避重试**）覆盖下游侧，纳入技术设计 §2.1 护栏范围 |
+| R10 | **下游外部 API 限额**（V4 新增，回应 engineering reviewer V3 P2；V5 补数量级初判，回应 product reviewer V4）：15–25 并发 workspace 跑 WI 循环时，对 **SF Core API 每日请求限额 / GUS / Slack / GitHub API** 的消耗此前从未测算——这些系统各有 governor limits，一期护栏只防我们自己的 LLM 调用风暴，**不防下游 governor limits** | 撞下游限额 → 采集/驱动链路 429/被限流、WI 卡住 | **数量级初判（V5，与 token 账单同样"框架乘成一个数"）**：一期 15–25 并发 × 每 WI 循环的下游调用主要是**低频事件读写**（Watcher 轮询 GUS/PR/CI 状态 + 少量写回 chatter/Slack 提醒 + GitHub PR 操作），非高频数据面调用；粗估每 workspace 每日下游调用**数十至低百级**，×25 并发 ≈ **每日数千级**。对照各系统已知限额量级——SF Core/GUS org 级 API 常在**每日 1.5 万+**量级、Slack 分层 tier（多数方法 ~1 req/s 量级）、GitHub REST **5,000 req/h/用户**——**一期主力本机、并发受控，大概率不撞 SF/GitHub 每日/每小时硬限额**；**唯一需盯的是 Slack 的每方法秒级速率**（突发提醒可能瞬时触顶）与 GUS 若走轮询密集读。故风险从「已登记」升级为「已给数量级初判：整体不撞、Slack 速率为主要盯防点」。缓解仍用与 R8 同框架（**每类外部 API 独立令牌桶 + 熔断 + 退避重试**，Slack 侧令牌桶按其秒级 tier 配），纳入技术设计 §2.1 护栏范围；试点期以实测校准（各限额确切数字待 OQ 核准，此处为立项估算级量级判断） |
 
 ---
 
@@ -439,6 +452,55 @@ sticky-note 面板把 GUS WI 按 **In Progress / Done / Todo** 分组呈现，�
 ---
 
 ## 修订区（Changelog）
+
+### V5 — 2026-08-12（回应 PR #4 剩余 3 条 unresolved human comment + tech/product/leadership V4 反馈）
+
+**本文档（可行性报告）相较 V4 的主要改进**：
+1. **§0.3(0) ENG360「≈3×」效率信号客观来源（回应 human comment HC-1）**：新增一块，给出 [Engineer360 Developer Productivity 仪表盘链接](https://epicorg.lightning.force.com/tableau/dashboard/ENG360_Developer_Productivity_Preview/view) + 截图 `v5-eng360-3x.png`，把"≈3×"从口头信号锚定到有出处的客观仪表盘（作者 Jianshan Xie 排名第 1、EO=105.07，第 2 名 87.96，其余 27–62，倍数 2–3.7×），并诚实标注 n=1、归因未隔离的边界（与 §3a 度量方案的降级判据 ≥1.5× 一致）。
+2. **§2c FDE 试点可审计成功判据（回应 product reviewer V4「本轮唯一 writer 可解的实质残留」）**：补一条与闸门 B 对齐的 gate——「1–2 名 FDE 在无核心团队实时支持下、≤3 天内针对自己客户场景跑通一个最小 workflow（含断点续跑 + 人工审批回叫）」，把 FDE 侧从「邀请了、聊了、没结论」钉到可判定。
+3. **§2c + §3a M1「埋点即验收」（回应 leadership reviewer V4 P1）**：把三条使用强度/信任代理指标的审计轨迹采集从 M1 第一天写死为**显式验收项**（零额外成本 = StateStore 审计轨迹本身），确保闸门 B 第 4 条 gate 从试点第一天有周环比曲线，而非 M4 才补。
+4. **§4 R10 从「一期即测算」升级为「立项即给数量级初判」（回应 product reviewer V4）**：与 token 账单同样"框架乘成一个数"——一期 15–25 并发 × 每日数十至低百级下游调用 ≈ 每日数千级，对照 SF Core/GUS（万+/日）、GitHub（5k/h）、Slack（秒级 tier）已知限额，给出「整体不撞硬限额、Slack 秒级速率为主要盯防点」的初判。
+5. **§0.4 闸门 B 需求侧 gate 建议强化（回应 product V4 建议 4 + leadership V4 P1）**：明确建议管理层在闸门 A 裁决时把「需求侧预算认领 gate」作为二期加码前的第 5 条 gate 写入闸门 B（属管理层动作，writer 无法单方钉死）。
+
+**跨文档同步**：本轮 human comment HC-2（DynamoDB 写入鉴权/数据安全/provision 路径）、HC-3（Matrix 专项调研）落在[技术设计文档](./distributed-orchestrator-tech-design.md)（新增 §1e + 组件 B 调研表 + tech V5 Changelog），数据安全/持久化约束同步至 `工作流模版.md` 与 `design-notes.md`；tech reviewer V4 的三条实施期细节（GSI2 派生背压自身热分区、GSI2 Count 扫描周期纳入压测调参、AgentforceActionAdapter 映射须持久化）亦落技术设计文档。
+
+#### V5 Q&A / 反馈回应（逐条）
+
+**Human comments（PR #4 上 V4 后剩余的 3 条 unresolved review thread）**：
+
+| # | comment | 处理 |
+|---|---|---|
+| 在恰当地方加入「3×」信号，来自 ENG360 仪表盘，加链接 + 截图（第一行是作者 Jianshan Xie） | **采纳（本文 §0.3(0)）**：加仪表盘链接 + `v5-eng360-3x.png` 截图 + 具体名次/EO 数值，并诚实框定 n=1 边界。thread resolve。 |
+| 考虑 DynamoDB 读写数据的授权方式（本机发起写状态如何授权？是否有成熟的内部用户写数据方案/PCSK？一期是否限制人类直接删改数据？falcon provision vs adhoc？太复杂可本地存储） | **采纳（技术设计 §1e，新增）**：写入鉴权分两条路径（人的身份=PCSK 短时凭据 / 服务身份=IAM Role，GUS 服务账号有先例）；数据安全给 `prevent_destroy` + human-review Terraform plan + 最小权限 + append-only 软删除 + CloudTrail 归因 + TCM RCA 教训；provision 路径 = 本地 SQLite 起步 / Falcon addon 推荐 / adhoc 不推荐。**因内部规范源本轮不可用**（codesearch/企业搜索鉴权失败、PCSK 全称未在 glossary 核实），已在 §1e 显式标注来源与置信度，未臆断缩写全称。thread resolve。 |
+| 调研 Matrix（codeai/matrix）：① 授权方式 ② 成熟度是否 ready ③ 云端 worker 部署运行与本项目预期的差距 ④ 是否支持状态持久化 | **采纳（技术设计 §1d 组件 B，新增专项调研表）**：Matrix 已在生产、MAS 短时 ES256 JWT + SPIFFE 授权、Falcon 上临时 K8s pod、Temporal 存状态、15 分钟心跳；关键差距 = 外部 org（GUS/Google）鉴权委托给 MCP Gateway、未解决我们的"代持"用例 → 直接抬升 OQ-2 优先级（从"待确认"升级为"有明确疑点待确认"）。结论：一期本机为主力、云端 Matrix 为增强而非前置依赖，状态用自有 DynamoDB 不假定 Matrix Temporal。**因 Matrix repo 本轮不可直接访问**，调研基于作者本人基于源码级审阅的对比文档，已在表内标注来源/置信度。thread resolve。 |
+
+**Tech reviewer V4（8.7/10）**：三条均为 P2/P3 实施期细节，全部落[技术设计文档](./distributed-orchestrator-tech-design.md)：
+
+| 视角/建议 | 处理 |
+|---|---|
+| 2.1 GSI2 派生背压真值查询自身的热分区风险（affinity 低基数 → GSI 分区键同构） | **采纳（技术设计 §1c）**：说明步数上限约束 GSI2 写量、二期加 `affinity#<shard>` 维度打散；结论行改为"主表与 GSI2 同受此约束"。 |
+| 3.1 GSI2 Count 扫描周期应纳入压测调参 | **采纳（技术设计 §2.1）**：把 `{GSI2 Count 扫描周期, lease TTL, 心跳间隔, dedup 表 TTL}` 一并列入性能压测调参项。 |
+| 4.1 AgentforceActionAdapter 的 `workid↔session` 映射本身是须持久化的 durable 态 | **采纳（技术设计 §3）**：映射持久化到 StateStore（非 adapter 内存）、CAS 更新、dedup-key=`workid#stepIndex#actionName` 保至多一次，与 §2.2 同一幂等原语。 |
+
+**Product reviewer V4（8.1/10）**：
+
+| 建议 | 优先级 | 处理 |
+|---|---|---|
+| 给 FDE 试点补一条与闸门 B 对齐的可审计成功判据（唯一 writer 可解实质残留） | **P2** | **采纳（§2c 第 4 点）**：加「1–2 名 FDE ≤3 天无核心团队实时支持跑通最小 workflow」gate。 |
+| R10 从「一期即测算」推进到「立项即给数量级初判」 | **P2（可选增强）** | **采纳（§4 R10）**：给出每日数千级下游调用 vs 各系统已知限额的量级初判，Slack 秒级速率标为主要盯防点。 |
+| 闸门 A 战略层裁决「编排层归属/是否重复投资」 | **P1（管理层动作，非 writer 可解）** | **记录**：报告侧（§0.4 闸门 A + §5 OQ-3/OQ-5 + §2b 敏感度 + §2d 技术桥收敛）已完全就位，球在管理层；writer 主动建议 kickoff 即安排该裁决会（行动项，非文档改动）。 |
+| 把需求侧预算认领 gate 写入闸门 B（二期，管理层动作） | **P1** | **采纳建议（§0.4 闸门 B 新增建议块）**：明确建议管理层把需求侧 gate 作为第 5 条写入闸门 B；属管理层动作，writer 仅能建议。 |
+| OQ-3 敏感度加「时间衰减情景」行 | **可选增强** | **不采纳（记录）**：属可选增强、非硬伤；一期立项不依赖竞品侵蚀轨迹的动态压测，保留为二期商业验证时再补，避免立项材料过度膨胀。 |
+
+**Leadership reviewer V4（8.0/10，conditional-GO 维持）**：
+
+| 建议 | 优先级 | 处理 |
+|---|---|---|
+| 立即安排闸门 A 战略层裁决会（非 writer 可解，管理层动作） | **P0** | **记录 + 行动项**：报告侧已全部就位（§0.0 门槛行 + §0.4 闸门 A + §5 OQ-3/OQ-5），writer 无需再改文档，但主动将"kickoff 即发起 30 分钟战略裁决会、产出署名结论 + owner"列为立项行动项交管理层。 |
+| §2c 三指标从试点 M1 第一天接入埋点，写死为验收项 | **P1** | **采纳（§2c 埋点即验收块 + §3a M1 行）**：M1 交付即含三指标审计轨迹埋点、M1 起产出周环比曲线。 |
+| 二期补一条需求侧 gate | **P1** | **采纳建议（§0.4 闸门 B）**：同 product V4 建议 4，建议管理层写入闸门 B。 |
+| 产出 1–2 页 presentation 抽取版（与完整评审版分离） | **P2（本轮 deferred，非扣分硬项）** | **[OPEN QUESTIONS] 维持 deferred**：倾向管理层确认展示形式后，由 writer 一次性从 §0.0 决策卡 + 开篇截图 + §0.1 鱼骨图 + §0.4 Conditional GO + 四条 gate 抽出独立 deck，避免完整评审版与 pitch 版混淆；本轮先确保 §0.0 可独立支撑 3 分钟 pitch。抽取版不影响评审，不阻塞立项。 |
+| Changelog/Q&A 保留完整版供留痕、presentation 版剔除 | **P2** | **采纳（记录）**：维持现状。 |
 
 ### V4 — 2026-08-11（回应 PR #4 human comments + tech/product/leadership V3 反馈）
 
